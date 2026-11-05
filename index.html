@@ -2,77 +2,301 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Basketball Team Manager</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#c8102e" />
+  <meta name="description" content="Zero-dependency basketball league manager: live scoring, box scores, standings, schedule, stats, printable reports and JSON backups. Works offline." />
+  <title>TeamBallStats — Basketball League Manager</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%8F%80%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
   <header>
-    <h1>🏀 Basketball Team Manager</h1>
-    <nav>
-      <button data-tab="roster" class="active">Roster</button>
-      <button data-tab="game">Game Log</button>
-      <button data-tab="stats">Stats</button>
-      <button data-tab="schedule">Schedule</button>
-    </nav>
+    <div class="brand">
+      <h1>🏀 TeamBallStats</h1>
+      <p id="header-subtitle">Basketball league manager · all data stays in this browser</p>
+    </div>
+    <div class="header-right">
+      <span id="header-record" class="header-record">0–0</span>
+      <nav id="main-nav" aria-label="Main navigation">
+        <button type="button" data-tab="dashboard" class="active">Overview</button>
+        <button type="button" data-tab="live">Live Console</button>
+        <button type="button" data-tab="schedule">Schedule</button>
+        <button type="button" data-tab="boxscores">Box Scores</button>
+        <button type="button" data-tab="standings">Standings</button>
+        <button type="button" data-tab="teams">Teams &amp; Roster</button>
+        <button type="button" data-tab="stats">Player Stats</button>
+        <button type="button" data-tab="reports">Reports</button>
+        <button type="button" data-tab="data">Data</button>
+      </nav>
+    </div>
   </header>
 
   <main>
-    <!-- ROSTER -->
-    <section id="roster" class="tab active">
-      <h2>Team Roster</h2>
-      <form id="player-form">
-        <input id="player-name" placeholder="Player name" required />
-        <input id="player-number" type="number" placeholder="#" min="0" max="99" required />
-        <input id="player-position" placeholder="Position (PG/SG/SF/PF/C)" />
-        <button type="submit">Add Player</button>
-      </form>
-      <table id="roster-table">
-        <thead>
-          <tr><th>#</th><th>Name</th><th>Position</th><th>Games</th><th>PPG</th><th></th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+    <!-- ================= OVERVIEW ================= -->
+    <section id="dashboard" class="tab active" aria-labelledby="dashboard-heading">
+      <div class="section-head">
+        <div><h2 id="dashboard-heading">League Overview</h2><p class="muted" id="dashboard-season"></p></div>
+      </div>
+      <div id="dashboard-live"></div>
+      <div id="dashboard-cards" class="card-grid"></div>
+      <div class="panel-grid">
+        <div class="panel">
+          <h3>Next on the schedule</h3>
+          <div id="dashboard-next"></div>
+        </div>
+        <div class="panel">
+          <h3>Recent results</h3>
+          <div id="dashboard-recent"></div>
+        </div>
+        <div class="panel">
+          <h3>Team leaders</h3>
+          <div id="dashboard-leaders"></div>
+        </div>
+      </div>
     </section>
 
-    <!-- GAME LOG -->
-    <section id="game" class="tab">
-      <h2>Log a Game</h2>
-      <form id="game-form">
-        <input id="opponent" placeholder="Opponent" required />
-        <input id="game-date" type="date" required />
-        <div id="stat-inputs"></div>
-        <button type="submit">Save Game</button>
-      </form>
-      <div id="game-list"></div>
+    <!-- ================= LIVE CONSOLE ================= -->
+    <section id="live" class="tab" aria-labelledby="live-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="live-heading">Live Scoring Console</h2>
+          <p class="muted">Tap a player, then tap a stat. Every play is saved instantly and can be undone.</p>
+        </div>
+      </div>
+      <div class="toolbar no-print">
+        <label class="field field-inline">
+          <span>Game</span>
+          <select id="live-game-select" aria-label="Select game"></select>
+        </label>
+        <button type="button" id="live-add-game" class="btn btn-ghost">+ New game</button>
+      </div>
+      <div id="live-console"></div>
     </section>
 
-    <!-- STATS -->
-    <section id="stats" class="tab">
-      <h2>Player Statistics</h2>
-      <div id="stats-summary"></div>
-      <button id="export-csv">Export CSV</button>
+    <!-- ================= SCHEDULE ================= -->
+    <section id="schedule" class="tab" aria-labelledby="schedule-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="schedule-heading">Schedule</h2>
+          <p class="muted">Fixtures live here; practices and other events can be added too.</p>
+        </div>
+        <span id="schedule-count" class="pill"></span>
+      </div>
+
+      <form id="schedule-form" class="panel form-panel no-print">
+        <h3>Add to schedule</h3>
+        <div class="form-grid">
+          <label class="field"><span>Type</span>
+            <select id="sched-type">
+              <option value="game">Game / fixture</option>
+              <option value="practice">Practice</option>
+              <option value="other">Other event</option>
+            </select>
+          </label>
+          <label class="field"><span>Date</span><input id="sched-date" type="date" required /></label>
+          <label class="field"><span>Time</span><input id="sched-time" type="time" /></label>
+          <div class="field" id="sched-home-wrap"><span>Home team</span><select id="sched-home"></select></div>
+          <div class="field" id="sched-away-wrap"><span>Away team</span><select id="sched-away"></select></div>
+          <div class="field" id="sched-title-wrap" hidden><span>Title</span><input id="sched-title" type="text" placeholder="Team practice" /></div>
+          <label class="field"><span>Location</span><input id="sched-location" type="text" placeholder="Main gym" /></label>
+          <label class="field"><span>Notes</span><input id="sched-notes" type="text" placeholder="Optional" /></label>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Add to schedule</button>
+          <p class="form-hint" id="sched-hint">Games are created as “Scheduled” and can be started from the Live Console.</p>
+        </div>
+      </form>
+
+      <div id="schedule-list"></div>
     </section>
 
-    <!-- SCHEDULE -->
-    <section id="schedule" class="tab">
-      <h2>Schedule</h2>
-      <form id="schedule-form">
-        <input id="sched-opponent" placeholder="Opponent" required />
-        <input id="sched-date" type="datetime-local" required />
-        <input id="sched-location" placeholder="Location" />
-        <button type="submit">Add Event</button>
-      </form>
-      <ul id="schedule-list"></ul>
+    <!-- ================= BOX SCORES ================= -->
+    <section id="boxscores" class="tab" aria-labelledby="box-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="box-heading">Box Scores</h2>
+          <p class="muted">Full per-player lines, team totals, shooting splits and scoring by quarter.</p>
+        </div>
+      </div>
+      <div class="toolbar no-print">
+        <label class="field field-inline"><span>Game</span><select id="box-game-select" aria-label="Select game"></select></label>
+        <button type="button" id="box-edit-btn" class="btn btn-ghost">Edit box score</button>
+        <button type="button" id="box-print-btn" class="btn btn-ghost">Print / PDF</button>
+        <button type="button" id="box-delete-btn" class="btn btn-danger-ghost">Delete game</button>
+      </div>
+      <div id="box-content"></div>
+    </section>
+
+    <!-- ================= STANDINGS ================= -->
+    <section id="standings" class="tab" aria-labelledby="standings-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="standings-heading">League Standings</h2>
+          <p class="muted">Computed from final games only. Win %, games behind, point differential, splits and form.</p>
+        </div>
+        <button type="button" id="standings-print-btn" class="btn btn-ghost no-print">Print / PDF</button>
+      </div>
+      <div id="standings-updated"></div>
+      <div id="standings-content"></div>
+      <p class="footnote" id="standings-note"></p>
+    </section>
+
+    <!-- ================= TEAMS & ROSTER ================= -->
+    <section id="teams" class="tab" aria-labelledby="teams-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="teams-heading">Teams &amp; Roster</h2>
+          <p class="muted">Add opponents, manage jersey numbers and assign players to teams.</p>
+        </div>
+      </div>
+      <div class="panel-grid two">
+        <form id="team-form" class="panel form-panel no-print">
+          <h3>Add a team</h3>
+          <div class="form-grid">
+            <label class="field"><span>Team name</span><input id="team-name" type="text" placeholder="Riverside Hawks" required /></label>
+            <label class="field"><span>Abbrev.</span><input id="team-short" type="text" maxlength="5" placeholder="HAW" /></label>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn btn-primary">Add team</button></div>
+        </form>
+        <form id="player-form" class="panel form-panel no-print">
+          <h3>Add a player</h3>
+          <div class="form-grid">
+            <label class="field"><span>Name</span><input id="player-name" type="text" placeholder="Jordan Smith" required /></label>
+            <label class="field"><span>#</span><input id="player-number" type="number" min="0" max="99" placeholder="23" required /></label>
+            <label class="field"><span>Position</span>
+              <select id="player-position">
+                <option value="">—</option><option>PG</option><option>SG</option>
+                <option>SF</option><option>PF</option><option>C</option>
+              </select>
+            </label>
+            <label class="field"><span>Team</span><select id="player-team"></select></label>
+          </div>
+          <div class="form-actions"><button type="submit" class="btn btn-primary">Add player</button></div>
+        </form>
+      </div>
+
+      <h3 class="subhead">Teams</h3>
+      <div id="teams-list"></div>
+
+      <div class="section-head subhead-head">
+        <h3 class="subhead">Players</h3>
+        <label class="field field-inline"><span>Filter</span><select id="roster-team-filter"></select></label>
+      </div>
+      <div id="roster-content"></div>
+    </section>
+
+    <!-- ================= PLAYER STATS ================= -->
+    <section id="stats" class="tab" aria-labelledby="stats-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="stats-heading">Player Statistics</h2>
+          <p class="muted">Season averages, totals, shooting splits and efficiency for every player.</p>
+        </div>
+        <div class="toolbar no-print">
+          <label class="field field-inline"><span>Team</span><select id="stats-team-filter"></select></label>
+          <button type="button" id="export-csv" class="btn btn-primary">Export CSV</button>
+        </div>
+      </div>
+      <div id="stats-summary" class="card-grid"></div>
+      <h3 class="subhead">Season leaders</h3>
+      <div id="stats-leaders" class="leader-grid"></div>
+      <h3 class="subhead">All players</h3>
+      <div id="stats-table"></div>
+    </section>
+
+    <!-- ================= REPORTS ================= -->
+    <section id="reports" class="tab" aria-labelledby="reports-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="reports-heading">Printable Reports</h2>
+          <p class="muted">Browser-native print — use “Save as PDF” in the print dialog. No PDF library, no network.</p>
+        </div>
+        <button type="button" id="report-print-btn" class="btn btn-primary no-print">Print / Save as PDF</button>
+      </div>
+      <div class="toolbar no-print">
+        <label class="field field-inline"><span>Report</span>
+          <select id="report-type">
+            <option value="boxscore">Box score (single game)</option>
+            <option value="standings">Standings + team records</option>
+            <option value="season">Full season report (all box scores + standings)</option>
+          </select>
+        </label>
+        <label class="field field-inline" id="report-game-wrap"><span>Game</span><select id="report-game-select"></select></label>
+        <button type="button" id="report-build-btn" class="btn btn-ghost">Build report</button>
+      </div>
+      <p class="footnote no-print" id="report-meta"></p>
+      <div id="report-sheet" class="report-sheet" aria-live="polite"></div>
+    </section>
+
+    <!-- ================= DATA ================= -->
+    <section id="data" class="tab" aria-labelledby="data-heading">
+      <div class="section-head">
+        <div>
+          <h2 id="data-heading">Data &amp; Settings</h2>
+          <p class="muted">League settings, full JSON backup/restore, CSV export and the reset switch.</p>
+        </div>
+      </div>
+      <div class="panel-grid two">
+        <form id="settings-form" class="panel form-panel no-print">
+          <h3>League settings</h3>
+          <div class="form-grid">
+            <label class="field"><span>League name</span><input id="setting-league-name" type="text" required /></label>
+            <label class="field"><span>Season</span><input id="setting-season" type="text" placeholder="2026-27" /></label>
+            <label class="field"><span>My team name</span><input id="setting-team-name" type="text" required /></label>
+            <label class="field"><span>Quarters</span><input id="setting-quarters" type="number" min="1" max="8" step="1" required /></label>
+            <label class="field"><span>Minutes / quarter</span><input id="setting-quarter-minutes" type="number" min="1" max="60" step="1" required /></label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save settings</button>
+            <span class="form-hint" id="settings-save-info"></span>
+          </div>
+        </form>
+
+        <div class="panel">
+          <h3>Backup &amp; restore</h3>
+          <p class="muted small">A single JSON file contains the league, teams, players, every game, box score and schedule event.</p>
+          <div class="stack no-print">
+            <button type="button" id="export-json" class="btn btn-primary">Download full JSON backup</button>
+            <button type="button" id="export-legacy" class="btn btn-ghost" hidden>Download pre-upgrade v1 backup</button>
+            <hr />
+            <label class="field"><span>Choose a backup file (.json)</span><input id="import-file" type="file" accept=".json,application/json" /></label>
+            <div class="radio-row">
+              <label><input type="radio" name="import-mode" value="merge" checked /> Merge into current data</label>
+              <label><input type="radio" name="import-mode" value="replace" /> Replace everything</label>
+            </div>
+            <button type="button" id="import-btn" class="btn btn-ghost">Validate &amp; import</button>
+            <div id="import-summary" class="import-summary"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel danger-zone no-print">
+        <h3>Danger zone</h3>
+        <p class="muted small" id="storage-info"></p>
+        <button type="button" id="reset-data" class="btn btn-danger">Reset all data</button>
+      </div>
     </section>
   </main>
 
   <footer>
-    <p>Data stored locally in your browser. <button id="reset-data">Reset All Data</button></p>
+    <p>TeamBallStats · zero dependencies · works offline · data lives in localStorage under <code>bball_tm_v1</code></p>
   </footer>
 
+  <div id="toast-host" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- Classic scripts (no modules, no bundler): index.html also works from file:// -->
   <script src="js/storage.js"></script>
   <script src="js/stats.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/dashboard.js"></script>
+  <script src="js/teams.js"></script>
+  <script src="js/schedule.js"></script>
+  <script src="js/live.js"></script>
+  <script src="js/boxscores.js"></script>
+  <script src="js/standings.js"></script>
+  <script src="js/leaders.js"></script>
+  <script src="js/reports.js"></script>
+  <script src="js/export.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

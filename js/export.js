@@ -1,0 +1,237 @@
+/* =========================================================================
+ * export.js — Data tab: league settings, single-file JSON backup/restore and
+ * the reset switch. Import goes through the SAME migration/validation path
+ * as loadData(), so v1 backups and v2 backups are both accepted.
+ * ========================================================================= */
+(function (TBS) {
+  'use strict';
+
+  const ui = TBS.ui;
+  const storage = TBS.storage;
+  const qs = ui.qs;
+  let pending = null;
+  let pendingName = '';
+
+  function summaryHtml(counts, label) {
+    return '<strong>' + ui.esc(label) + '</strong><br />' +
+      'Schema v' + counts.version + ' · ' + counts.teams + ' teams · ' +
+      counts.players + ' players · ' + counts.games + ' games (' + counts.finalGames +
+      ' final) · ' + counts.statLines + ' player box-score lines · ' + counts.events + ' calendar events';
+  }
+
+  function setIfIdle(selector, value) {
+    const el = qs(selector);
+    if (!el || document.activeElement === el) return;
+    el.value = value;
+  }
+
+  /* Merge by stable identity, remapping ids when a duplicate name exists. */
+  function mergeData(current, incoming) {
+    const out = storage.clone(current);
+    const inc = storage.coerce(incoming);
+    const key = s => String(s || '').trim().toLowerCase();
+
+    /* Teams: match on name, never import another "primary" flag. */
+    const teamMap = {};
+    inc.teams.forEach(t => {
+      const existing = out.teams.find(x => key(x.name) === key(t.name)) ||
+        out.teams.find(x => x.id === t.id);
+      if (existing) {
+        teamMap[t.id] = existing.id;
+      } else {
+        const id = t.id && !out.teams.some(x => x.id === t.id) ? t.id : storage.uid('team');
+        out.teams.push({ id: id, name: t.name, short: t.short, primary: false });
+        teamMap[t.id] = id;
+      }
+    });
+    const mapTeam = id => teamMap[id] || (out.teams.some(t => t.id === id) ? id : out.league.primaryTeamId);
+
+    /* Players: match on id, else on team + number + name. */
+    const playerMap = {};
+    inc.players.forEach(p => {
+      const teamId = mapTeam(p.teamId);
+      const existing = out.players.find(x => x.id === p.id) ||
+        out.players.find(x => x.teamId === teamId && Number(x.number) === Number(p.number) && key(x.name) === key(p.name));
+      if (existing) {
+        playerMap[p.id] = existing.id;
+      } else {
+        const id = p.id && !out.players.some(x => x.id === p.id) ? p.id : storage.uid('player');
+        out.players.push({
+          id: id, teamId: teamId, name: p.name, number: p.number,
+          position: p.position, active: p.active
+        });
+        playerMap[p.id] = id;
+      }
+    });
+    const mapPlayer = id => playerMap[id] || (out.players.some(p => p.id === id) ? id : '');
+
+    /* Games: skip exact id duplicates; otherwise remap and insert. */
+    inc.games.forEach(g => {
+      const homeTeamId = mapTeam(g.homeTeamId);
+      const awayTeamId = mapTeam(g.awayTeamId);
+      const duplicate = out.games.some(x =>
+        x.id === g.id ||
+        (x.date === g.date && x.homeTeamId === homeTeamId && x.awayTeamId === awayTeamId &&
+         Number(x.homeScore) === Number(g.homeScore) && Number(x.awayScore) === Number(g.awayScore))
+      );
+      if (duplicate) return;
+      const id = g.id && !out.games.some(x => x.id === g.id) ? g.id : storage.uid('game');
+      out.games.push(Object.assign({}, g, {
+        id: id,
+        homeTeamId: homeTeamId,
+        awayTeamId: awayTeamId,
+        stats: g.stats.map(s => Object.assign({}, s, {
+          playerId: mapPlayer(s.playerId),
+          teamId: mapTeam(s.teamId)
+        })).filter(s => s.playerId),
+        events: g.events.map(e => Object.assign({}, e, {
+          teamId: mapTeam(e.teamId),
+          playerId: e.playerId ? mapPlayer(e.playerId) : ''
+        }))
+      }));
+    });
+
+    /* Calendar events: skip id or date+title duplicates. */
+    inc.schedule.forEach(ev => {
+      if (out.schedule.some(x => x.id === ev.id ||
+        (x.date === ev.date && key(x.title) === key(ev.title)))) return;
+      out.schedule.push(Object.assign({}, ev, {
+        id: ev.id && !out.schedule.some(x => x.id === ev.id) ? ev.id : storage.uid('event')
+      }));
+    });
+
+    /* League settings always come from the current install. */
+    return storage.coerce(out);
+  }
+
+  function render(state) {
+    const primary = state.teams.find(t => t.id === state.league.primaryTeamId);
+    setIfIdle('#setting-league-name', state.league.name);
+    setIfIdle('#setting-season', state.league.season);
+    setIfIdle('#setting-team-name', primary ? primary.name : '');
+    setIfIdle('#setting-quarters', state.league.quarters);
+    setIfIdle('#setting-quarter-minutes', state.league.quarterMinutes);
+
+    let bytes = 0;
+    try { bytes = (localStorage.getItem(storage.DB_KEY) || '').length; } catch (_) {}
+    const counts = storage.summarize(state);
+    qs('#storage-info').textContent =
+      'Stored under ' + storage.DB_KEY + ' · ~' + (bytes / 1024).toFixed(1) + ' KB · ' +
+      counts.players + ' players, ' + counts.games + ' games, ' + counts.events + ' events. ' +
+      (state.meta && state.meta.migratedFrom
+        ? 'Upgraded in place from ' + state.meta.migratedFrom + ' on ' + ui.fmtDate(state.meta.migratedAt ? state.meta.migratedAt.slice(0, 10) : '') + '.'
+        : 'Schema v2 (no legacy migration needed).') +
+      ' Export a JSON backup before resetting.';
+
+    const legacyBtn = qs('#export-legacy');
+    legacyBtn.hidden = !storage.legacyBackup();
+    if (pending) qs('#import-summary').innerHTML = summaryHtml(storage.summarize(pending), 'Ready: ' + pendingName);
+  }
+
+  function readFile(file) {
+    pending = null;
+    pendingName = file ? file.name : '';
+    qs('#import-summary').innerHTML = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Not an object');
+        if (!Array.isArray(parsed.players) && !Array.isArray(parsed.teams)) {
+          throw new Error('Missing players/teams arrays');
+        }
+        pending = parsed;
+        qs('#import-summary').innerHTML = summaryHtml(storage.summarize(parsed), 'Ready: ' + pendingName);
+        ui.toast('Backup validated. Choose merge or replace, then import.', 'success');
+      } catch (err) {
+        pending = null;
+        qs('#import-summary').textContent = 'Invalid backup: ' + err.message + '. Expected a TeamBallStats JSON file.';
+        ui.toast('That file is not a valid backup.', 'error');
+      }
+    };
+    reader.onerror = () => {
+      pending = null;
+      ui.toast('Could not read the file.', 'error');
+    };
+    reader.readAsText(file);
+  }
+
+  function init() {
+    qs('#settings-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const leagueName = qs('#setting-league-name').value.trim();
+      const teamName = qs('#setting-team-name').value.trim();
+      const season = qs('#setting-season').value.trim();
+      const quarters = storage.num(qs('#setting-quarters').value, 4);
+      const minutes = storage.num(qs('#setting-quarter-minutes').value, 10);
+      if (!leagueName || !teamName) return;
+      TBS.app.commit(d => {
+        d.league.name = leagueName;
+        d.league.season = season;
+        d.league.quarters = Math.max(1, Math.min(8, Math.round(quarters)));
+        d.league.quarterMinutes = Math.max(1, Math.min(60, Math.round(minutes)));
+        const t = d.teams.find(x => x.id === d.league.primaryTeamId);
+        if (t) {
+          t.name = teamName;
+          if (!t.short || t.short === t.name.slice(0, 3).toUpperCase()) {
+            t.short = teamName.slice(0, 3).toUpperCase();
+          }
+        }
+      });
+      qs('#settings-save-info').textContent = 'Saved just now.';
+      ui.toast('League settings saved.', 'success');
+    });
+
+    qs('#export-json').addEventListener('click', () => {
+      const state = TBS.app.getState();
+      const payload = Object.assign({}, state, {
+        app: 'TeamBallStats',
+        schema: storage.DB_KEY,
+        exportedAt: new Date().toISOString()
+      });
+      if (ui.download('teamballstats-backup-' + storage.todayISO() + '.json',
+          JSON.stringify(payload, null, 2), 'application/json')) {
+        ui.toast('Full JSON backup downloaded.', 'success');
+      }
+    });
+
+    qs('#export-legacy').addEventListener('click', () => {
+      const raw = storage.legacyBackup();
+      if (!raw) return;
+      ui.download('teamballstats-v1-original-' + storage.todayISO() + '.json', raw, 'application/json');
+    });
+
+    qs('#import-file').addEventListener('change', e => readFile(e.target.files[0]));
+
+    qs('#import-btn').addEventListener('click', () => {
+      if (!pending) { ui.toast('Choose a valid .json backup first.', 'error'); return; }
+      const mode = (ui.qs('input[name="import-mode"]:checked') || {}).value || 'merge';
+      if (mode === 'replace') {
+        if (!ui.confirmDanger('Replace ALL current data with this backup? This cannot be undone unless you export first.')) return;
+        TBS.app.replace(storage.coerce(pending));
+        ui.toast('Backup restored (replace).', 'success');
+      } else {
+        const merged = mergeData(TBS.app.getState(), pending);
+        TBS.app.replace(merged);
+        ui.toast('Backup merged into current league.', 'success');
+      }
+      pending = null;
+      qs('#import-file').value = '';
+      qs('#import-summary').innerHTML = 'Import complete — check Standings and Box Scores.';
+    });
+
+    qs('#reset-data').addEventListener('click', () => {
+      if (!ui.confirmDanger('Erase ALL data (teams, players, games, box scores, schedule and settings)? Export a backup first. This cannot be undone.')) return;
+      storage.resetData();
+      TBS.app.replace(storage.defaultData());
+      pending = null;
+      qs('#import-summary').textContent = '';
+      ui.toast('All data reset.', 'success');
+    });
+  }
+
+  TBS.backup = {
+    render: render, init: init, mergeData: mergeData, summaryHtml: summaryHtml
+  };
+})(window.TBS = window.TBS || {});
