@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Basketball Team Manager</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header>
+    <h1>🏀 Basketball Team Manager</h1>
+    <nav>
+      <button data-tab="roster" class="active">Roster</button>
+      <button data-tab="game">Game Log</button>
+      <button data-tab="stats">Stats</button>
+      <button data-tab="schedule">Schedule</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ROSTER -->
+    <section id="roster" class="tab active">
+      <h2>Team Roster</h2>
+      <form id="player-form">
+        <input id="player-name" placeholder="Player name" required />
+        <input id="player-number" type="number" placeholder="#" min="0" max="99" required />
+        <input id="player-position" placeholder="Position (PG/SG/SF/PF/C)" />
+        <button type="submit">Add Player</button>
+      </form>
+      <table id="roster-table">
+        <thead>
+          <tr><th>#</th><th>Name</th><th>Position</th><th>Games</th><th>PPG</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- GAME LOG -->
+    <section id="game" class="tab">
+      <h2>Log a Game</h2>
+      <form id="game-form">
+        <input id="opponent" placeholder="Opponent" required />
+        <input id="game-date" type="date" required />
+        <div id="stat-inputs"></div>
+        <button type="submit">Save Game</button>
+      </form>
+      <div id="game-list"></div>
+    </section>
+
+    <!-- STATS -->
+    <section id="stats" class="tab">
+      <h2>Player Statistics</h2>
+      <div id="stats-summary"></div>
+      <button id="export-csv">Export CSV</button>
+    </section>
+
+    <!-- SCHEDULE -->
+    <section id="schedule" class="tab">
+      <h2>Schedule</h2>
+      <form id="schedule-form">
+        <input id="sched-opponent" placeholder="Opponent" required />
+        <input id="sched-date" type="datetime-local" required />
+        <input id="sched-location" placeholder="Location" />
+        <button type="submit">Add Event</button>
+      </form>
+      <ul id="schedule-list"></ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>Data stored locally in your browser. <button id="reset-data">Reset All Data</button></p>
+  </footer>
+
+  <script src="js/storage.js"></script>
+  <script src="js/stats.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
