@@ -1,8 +1,0 @@
-{
-  "players": [
-    { "id": "p1", "name": "Jordan Smith", "number": 23, "position": "SG" },
-    { "id": "p2", "name": "Alex Rivera", "number": 11, "position": "PG" }
-  ],
-  "games": [],
-  "schedule": []
-}

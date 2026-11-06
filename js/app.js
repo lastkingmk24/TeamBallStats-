@@ -1,227 +1,163 @@
-// Main app wiring
-let data = loadData();
+/* =========================================================================
+ * app.js — application wiring, state, tab routing and shared helpers.
+ * Loaded LAST. All modules expose {render, init} on window.TBS.
+ * There is no build step, no framework, no CDN and no network access.
+ * ========================================================================= */
+(function (TBS) {
+  'use strict';
 
-// ---------- Tab switching ----------
-document.querySelectorAll('nav button').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById(btn.dataset.tab).classList.add('active');
-    if (btn.dataset.tab === 'stats') renderStats();
-  });
-});
+  const ui = TBS.ui;
+  const storage = TBS.storage;
+  const st = TBS.stats;
 
-// ---------- Roster ----------
-const playerForm = document.getElementById('player-form');
-playerForm.addEventListener('submit', e => {
-  e.preventDefault();
-  const name = document.getElementById('player-name').value.trim();
-  const number = parseInt(document.getElementById('player-number').value, 10);
-  const position = document.getElementById('player-position').value.trim().toUpperCase();
-  if (!name || isNaN(number)) return;
-  data.players.push({ id: crypto.randomUUID(), name, number, position });
-  saveData(data);
-  playerForm.reset();
-  renderRoster();
-});
+  const TABS = ['dashboard', 'live', 'schedule', 'boxscores', 'standings',
+    'teams', 'stats', 'reports', 'data'];
 
-function renderRoster() {
-  const tbody = document.querySelector('#roster-table tbody');
-  tbody.innerHTML = '';
-  data.players.sort((a,b) => a.number - b.number).forEach(p => {
-    const agg = playerAggregate(p.id, data.games);
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${p.number}</td>
-      <td>${p.name}</td>
-      <td>${p.position || '—'}</td>
-      <td>${agg.gp}</td>
-      <td>${agg.ppg}</td>
-      <td><button class="delete-btn" data-id="${p.id}">Remove</button></td>
-    `;
-    tbody.appendChild(tr);
-  });
-  tbody.querySelectorAll('.delete-btn').forEach(b => {
-    b.addEventListener('click', () => {
-      if (!confirm('Remove this player and all their stats?')) return;
-      data.players = data.players.filter(p => p.id !== b.dataset.id);
-      data.games.forEach(g => { g.stats = g.stats.filter(s => s.playerId !== b.dataset.id); });
-      saveData(data);
-      renderRoster();
-      renderGameForm();
-    });
-  });
-}
-
-// ---------- Game form ----------
-function renderGameForm() {
-  const container = document.getElementById('stat-inputs');
-  container.innerHTML = '';
-  if (data.players.length === 0) {
-    container.innerHTML = '<p>Add players to the roster first.</p>';
-    return;
-  }
-  const fields = ['pts','reb','ast','stl','blk','tov','fgm','fga'];
-  const header = document.createElement('div');
-  header.className = 'player-input-row';
-  header.innerHTML = `<label>Player</label>${fields.map(f => `<label>${f.toUpperCase()}</label>`).join('')}`;
-  container.appendChild(header);
-
-  data.players.sort((a,b)=>a.number-b.number).forEach(p => {
-    const row = document.createElement('div');
-    row.className = 'player-input-row';
-    row.dataset.playerId = p.id;
-    row.innerHTML = `<label>#${p.number} ${p.name}</label>` +
-      fields.map(f => `<input type="number" min="0" data-stat="${f}" placeholder="0" />`).join('');
-    container.appendChild(row);
-  });
-}
-
-const gameForm = document.getElementById('game-form');
-gameForm.addEventListener('submit', e => {
-  e.preventDefault();
-  const opponent = document.getElementById('opponent').value.trim();
-  const date = document.getElementById('game-date').value;
-  const stats = [];
-  document.querySelectorAll('#stat-inputs .player-input-row[data-player-id]').forEach(row => {
-    const statObj = { playerId: row.dataset.playerId };
-    row.querySelectorAll('input[data-stat]').forEach(inp => {
-      statObj[inp.dataset.stat] = Number(inp.value) || 0;
-    });
-    const total = Object.keys(statObj).filter(k => k !== 'playerId').reduce((a,k)=>a+statObj[k],0);
-    if (total > 0) stats.push(statObj);
-  });
-  if (!opponent || !date) return alert('Opponent and date are required');
-  if (stats.length === 0) return alert('Enter stats for at least one player');
-
-  const teamScore = stats.reduce((a,s)=>a+s.pts,0);
-  const oppScore = prompt('Opponent score:', '0');
-  const game = {
-    id: crypto.randomUUID(),
-    opponent, date,
-    teamScore,
-    oppScore: Number(oppScore) || 0,
-    stats
+  const VIEWS = {
+    dashboard: 'dashboard',
+    live: 'live',
+    schedule: 'schedule',
+    boxscores: 'boxscores',
+    standings: 'standings',
+    teams: 'teams',
+    stats: 'leaders',
+    reports: 'reports',
+    data: 'backup'
   };
-  data.games.push(game);
-  saveData(data);
-  gameForm.reset();
-  renderGameForm();
-  renderGames();
-});
 
-function renderGames() {
-  const list = document.getElementById('game-list');
-  list.innerHTML = '';
-  [...data.games].reverse().forEach(g => {
-    const card = document.createElement('div');
-    card.className = 'game-card';
-    const result = g.teamScore > g.oppScore ? 'W' : g.teamScore < g.oppScore ? 'L' : 'T';
-    card.innerHTML = `
-      <h3>${result} vs ${g.opponent} — ${g.teamScore}–${g.oppScore}</h3>
-      <p><small>${g.date}</small></p>
-      <button class="delete-btn" data-id="${g.id}">Delete</button>
-    `;
-    card.querySelector('.delete-btn').addEventListener('click', () => {
-      if (!confirm('Delete this game?')) return;
-      data.games = data.games.filter(x => x.id !== g.id);
-      saveData(data);
-      renderGames();
-      renderRoster();
-    });
-    list.appendChild(card);
-  });
-}
+  let state = storage.loadData();
+  let activeTab = 'dashboard';
 
-// ---------- Stats ----------
-function renderStats() {
-  const container = document.getElementById('stats-summary');
-  const rec = teamRecord(data.games);
-  container.innerHTML = `<p><strong>Record:</strong> ${rec.w}–${rec.l}</p>`;
+  function getState() { return state; }
+  function activeTabName() { return activeTab; }
 
-  if (data.players.length === 0) {
-    container.innerHTML += '<p>No players yet.</p>';
-    return;
+  function safeRender(tab) {
+    const view = TBS[VIEWS[tab]];
+    if (!view || typeof view.render !== 'function') return;
+    try { view.render(state); }
+    catch (err) {
+      console.error('[TeamBallStats] render failed in ' + tab + ':', err);
+      ui.toast('Could not render ' + tab + ': ' + err.message, 'error');
+    }
   }
-  const table = document.createElement('table');
-  table.innerHTML = `
-    <thead><tr>
-      <th>Player</th><th>GP</th><th>PPG</th><th>RPG</th><th>APG</th>
-      <th>SPG</th><th>BPG</th><th>FG%</th><th>PTS</th>
-    </tr></thead><tbody></tbody>`;
-  const tbody = table.querySelector('tbody');
-  data.players.sort((a,b)=>a.number-b.number).forEach(p => {
-    const a = playerAggregate(p.id, data.games);
-    const spg = a.gp ? (a.totals.stl/a.gp).toFixed(1) : '0.0';
-    const bpg = a.gp ? (a.totals.blk/a.gp).toFixed(1) : '0.0';
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>#${p.number} ${p.name}</td>
-      <td>${a.gp}</td><td>${a.ppg}</td><td>${a.rpg}</td><td>${a.apg}</td>
-      <td>${spg}</td><td>${bpg}</td><td>${a.fgPct}</td><td>${a.totals.pts}</td>`;
-    tbody.appendChild(tr);
-  });
-  container.appendChild(table);
-}
 
-document.getElementById('export-csv').addEventListener('click', () => {
-  const csv = toCSV(data.players, data.games);
-  const blob = new Blob([csv], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `basketball-stats-${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-});
+  function updateHeader() {
+    const rec = st.teamRecord(state.games, state.league.primaryTeamId);
+    const el = ui.qs('#header-record');
+    if (el) el.textContent = rec.w + '–' + rec.l + (rec.t ? '–' + rec.t : '');
+    const sub = ui.qs('#header-subtitle');
+    if (sub) sub.textContent = state.league.name + ' · Season ' + state.league.season +
+      ' · all data stays in this browser';
+    document.title = 'TeamBallStats — ' + state.league.name;
+  }
 
-// ---------- Schedule ----------
-const schedForm = document.getElementById('schedule-form');
-schedForm.addEventListener('submit', e => {
-  e.preventDefault();
-  const opponent = document.getElementById('sched-opponent').value.trim();
-  const date = document.getElementById('sched-date').value;
-  const location = document.getElementById('sched-location').value.trim();
-  if (!opponent || !date) return;
-  data.schedule.push({ id: crypto.randomUUID(), opponent, date, location });
-  data.schedule.sort((a,b)=>new Date(a.date)-new Date(b.date));
-  saveData(data);
-  schedForm.reset();
-  renderSchedule();
-});
+  function renderAll() {
+    TABS.forEach(safeRender);
+    updateHeader();
+  }
 
-function renderSchedule() {
-  const list = document.getElementById('schedule-list');
-  list.innerHTML = '';
-  data.schedule.forEach(s => {
-    const li = document.createElement('li');
-    li.innerHTML = `<strong>${new Date(s.date).toLocaleString()}</strong> — vs ${s.opponent}
-      ${s.location ? ' @ ' + s.location : ''}
-      <button class="delete-btn" data-id="${s.id}">×</button>`;
-    li.querySelector('.delete-btn').addEventListener('click', () => {
-      data.schedule = data.schedule.filter(x => x.id !== s.id);
-      saveData(data);
-      renderSchedule();
+  function commit(mutator) {
+    if (typeof mutator === 'function') mutator(state);
+    const ok = storage.saveData(state);
+    if (!ok) ui.toast('Could not save — localStorage may be full or disabled.', 'error');
+    renderAll();
+    return ok;
+  }
+
+  function replace(nextData) {
+    state = storage.coerce(nextData);
+    const ok = storage.saveData(state);
+    if (!ok) ui.toast('Could not save the restored data.', 'error');
+    renderAll();
+    return ok;
+  }
+
+  function activate(tab) {
+    const target = TABS.indexOf(tab) >= 0 ? tab : 'dashboard';
+    activeTab = target;
+    ui.qsa('nav button[data-tab]').forEach(btn =>
+      btn.classList.toggle('active', btn.dataset.tab === target));
+    ui.qsa('main > section.tab').forEach(section =>
+      section.classList.toggle('active', section.id === target));
+    safeRender(target);
+    updateHeader();
+  }
+
+  function go(tab) {
+    const target = TABS.indexOf(tab) >= 0 ? tab : 'dashboard';
+    const current = decodeURIComponent(String(location.hash || '').replace(/^#/, ''));
+    if (current === target) activate(target);
+    else location.hash = target;
+  }
+
+  function team(id) {
+    return state.teams.find(t => t.id === id) ||
+      { id: id, name: 'Unknown team', short: 'UNK', primary: false };
+  }
+
+  function teamName(id) { return team(id).name; }
+
+  function playersFor(teamId) {
+    return state.players
+      .filter(p => p.teamId === teamId && p.active !== false)
+      .sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999));
+  }
+
+  function init() {
+    /* Module event wiring (one-time, delegated listeners only). */
+    TABS.forEach(tab => {
+      const view = TBS[VIEWS[tab]];
+      if (view && typeof view.init === 'function') {
+        try { view.init(); }
+        catch (err) { console.error('[TeamBallStats] init failed in ' + tab + ':', err); }
+      }
     });
-    list.appendChild(li);
-  });
-}
 
-// ---------- Reset ----------
-document.getElementById('reset-data').addEventListener('click', () => {
-  if (!confirm('Erase ALL data? This cannot be undone.')) return;
-  resetData();
-  data = loadData();
-  renderAll();
-});
+    ui.qsa('nav button[data-tab]').forEach(btn => {
+      btn.addEventListener('click', () => go(btn.dataset.tab));
+    });
 
-// ---------- Init ----------
-function renderAll() {
-  renderRoster();
-  renderGameForm();
-  renderGames();
-  renderSchedule();
-  renderStats();
-}
-renderAll();
+    window.addEventListener('hashchange', () => {
+      const tab = decodeURIComponent(String(location.hash || '').replace(/^#/, ''));
+      activate(TABS.indexOf(tab) >= 0 ? tab : 'dashboard');
+    });
+
+    /* Keep multiple browser tabs in sync (storage events skip the writer). */
+    window.addEventListener('storage', e => {
+      if (e.key !== storage.DB_KEY || !e.newValue) return;
+      state = storage.loadData();
+      renderAll();
+      ui.toast('Data changed in another tab — view refreshed.', 'info');
+    });
+
+    renderAll();
+    const initial = decodeURIComponent(String(location.hash || '').replace(/^#/, ''));
+    activate(TABS.indexOf(initial) >= 0 ? initial : 'dashboard');
+
+    if (state.meta && state.meta.migratedFrom === 'v1') {
+      ui.toast('Upgraded your existing v1 data (players, games, schedule) — original saved as a backup.', 'success');
+    }
+  }
+
+  TBS.app = {
+    TABS: TABS,
+    init: init,
+    getState: getState,
+    commit: commit,
+    replace: replace,
+    renderAll: renderAll,
+    refresh: renderAll,
+    go: go,
+    activate: activate,
+    activeTab: activeTabName,
+    team: team,
+    teamName: teamName,
+    playersFor: playersFor
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, { once: true });
+  } else {
+    init();
+  }
+})(window.TBS = window.TBS || {});
