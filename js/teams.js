@@ -530,11 +530,21 @@
     });
   }
 
+  function showTeamStats(teamId) {
+    const state = TBS.app.getState();
+    if (!state.teams.some(t => t.id === teamId)) return;
+    if (auth() && !auth().canViewTeamStats(teamId)) return;
+    rosterFilter = teamId;
+    render(state);
+    TBS.app.go('teams');
+  }
+
   TBS.teams = {
     render: render,
     init: init,
     openEditPlayer: openEditPlayer,
     editPlayer: openEditPlayer,
-    editTeam: editTeam
+    editTeam: editTeam,
+    showTeamStats: showTeamStats
   };
 })(window.TBS = window.TBS || {});

@@ -68,14 +68,15 @@
     const games = gamesInScope(state);
     const players = state.players.filter(p => filterTeam === 'all' || p.teamId === filterTeam);
     const primaryId = state.league.primaryTeamId;
-    const rec = st.teamRecord(games, primaryId);
+    const recordTeamId = filterTeam === 'all' ? primaryId : filterTeam;
+    const rec = st.teamRecord(games, recordTeamId);
     const board = st.leaderboard(players, games);
     const topScorer = board.ppg[0];
     const totalPoints = players.reduce((a, p) => a + st.playerAggregate(p.id, games).totals.pts, 0);
 
     qs('#stats-summary').innerHTML = [
       { label: 'Players', value: players.length, detail: state.teams.length + ' teams in league' },
-      { label: 'My team record', value: rec.w + '–' + rec.l, detail: rec.gp + ' final games · ' + rec.streak + ' streak', accent: true },
+      { label: filterTeam === 'all' ? 'My team record' : teamName(state, recordTeamId) + ' record', value: rec.w + '–' + rec.l, detail: rec.gp + ' final games · ' + rec.streak + ' streak', accent: true },
       { label: 'Total points', value: ui.fmtInt(totalPoints), detail: 'Across all filtered players' },
       { label: 'Leading scorer', value: topScorer ? ui.fmt1(topScorer.value) : '—', detail: topScorer ? topScorer.player.name + ' PPG' : 'No final games yet' }
     ].map(c => '<div class="card stat-card' + (c.accent ? ' accent' : '') + '">' +
@@ -250,5 +251,16 @@
     });
   }
 
-  TBS.leaders = { render: render, init: init };
+  function showTeam(teamId) {
+    const state = TBS.app.getState();
+    if (!state.teams.some(t => t.id === teamId)) return;
+    if (TBS.auth && !TBS.auth.canViewTeamStats(teamId)) return;
+    filterTeam = teamId;
+    const select = qs('#stats-team-filter');
+    if (select) select.value = teamId;
+    render(state);
+    TBS.app.go('stats');
+  }
+
+  TBS.leaders = { render: render, init: init, showTeam: showTeam };
 })(window.TBS = window.TBS || {});

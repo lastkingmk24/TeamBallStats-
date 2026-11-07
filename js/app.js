@@ -252,10 +252,11 @@
   }
 
   function replace(nextData) {
-    state = storage.coerce(nextData);
+    state = storage.coerce(storage.withoutCredentials(nextData));
     const ok = storage.saveData(state);
     if (!ok) saveFailureToast();
     if (TBS.theme) TBS.theme.refresh(state.league.theme);
+    if (auth() && auth().syncSession) auth().syncSession(state);
     renderAll();
     return ok;
   }
@@ -423,6 +424,7 @@
     window.addEventListener('storage', e => {
       if (e.key === storage.DB_KEY && e.newValue) {
         state = storage.loadData();
+        if (auth() && auth().syncSession) auth().syncSession(state);
         renderAll();
         ui.toast('Data changed in another tab — view refreshed.', 'info');
       }
