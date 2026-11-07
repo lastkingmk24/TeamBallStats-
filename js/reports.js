@@ -1,18 +1,27 @@
 /* =========================================================================
  * reports.js — printable, PDF-style reports using only window.print().
- * No jsPDF, no CDN, no external library: the browser's own print dialog
- * supplies "Save as PDF". The printable sheet is a normal DOM node styled
- * by @media print in css/style.css.
+ *
+ * No jsPDF, no CDN, no font or image request: the browser's own print dialog
+ * supplies "Save as PDF". The printable sheet is a normal DOM node styled by
+ * @media print in css/style.css, which also forces the LIGHT palette so dark
+ * mode never produces unreadable reports.
+ *
+ * Report types: box score, standings + rosters, full season, player profile.
  * ========================================================================= */
 (function (TBS) {
   'use strict';
 
   const ui = TBS.ui;
   const st = TBS.stats;
+  const an = TBS.analytics;
   const qs = ui.qs;
 
+  function teamOf(state, id) {
+    return state.teams.find(x => x.id === id) || null;
+  }
+
   function teamName(state, id) {
-    const t = state.teams.find(x => x.id === id);
+    const t = teamOf(state, id);
     return t ? t.name : 'Unknown team';
   }
 
@@ -21,7 +30,7 @@
       '<div><div class="report-brand">' + ui.esc(state.league.name) + ' · Season ' +
         ui.esc(state.league.season) + '</div>' +
         '<h2>' + ui.esc(title) + '</h2>' +
-        (subtitle ? '<div class="report-center" style="text-align:left;margin:0">' + ui.esc(subtitle) + '</div>' : '') +
+        (subtitle ? '<div class="report-center report-subtitle">' + ui.esc(subtitle) + '</div>' : '') +
       '</div>' +
       '<div class="report-date">TeamBallStats<br />' + ui.fmtDate(TBS.storage.todayISO()) + '</div>' +
       '</div>';
@@ -32,10 +41,14 @@
       '<span>Generated locally · no data leaves your browser</span></div>';
   }
 
-  function boxTable(side) {
+  function boxTable(side, state) {
     const cols = ['#', 'Player', 'MIN', 'PTS', 'REB', 'AST', 'STL', 'BLK', 'FG', '3PT', 'FT', 'TOV', 'PF'];
     const splits = (m, a) => ui.fmtInt(m) + '/' + ui.fmtInt(a);
-    const line = r => '<tr><td>' + ui.esc(r.player.number) + '</td><td>' + ui.esc(r.player.name) + '</td>' +
+    const line = r => '<tr>' +
+      '<td>' + ui.esc(r.player.number) + '</td>' +
+      '<td class="player-print-cell">' + ui.avatar(r.player, {
+        size: 'sm', team: teamOf(state, r.player.teamId), showNumber: false }) +
+        ' <span>' + ui.esc(r.player.name) + '</span></td>' +
       '<td class="align-right">' + ui.fmtInt(r.stats.min) + '</td>' +
       '<td class="align-right"><strong>' + ui.fmtInt(r.stats.pts) + '</strong></td>' +
       '<td class="align-right">' + ui.fmtInt(r.stats.reb) + '</td>' +
@@ -88,7 +101,7 @@
   function boxScoreHtml(state, game, withHeader) {
     const box = st.gameBox(game, state.players, state.teams, state.league);
     const meta = ui.fmtDate(game.date) + (game.time ? ' · ' + ui.fmtTime(game.time) : '') +
-      (game.location ? ' · ' + game.location : '') + ' · ' + game.status.toUpperCase();
+      (game.location ? ' · ' + game.location : '') + ' · ' + String(game.status).toUpperCase();
     return (withHeader ? head('Official Box Score', meta, state) : '') +
       '<div class="report-section">' +
         '<div class="report-score"><span>' + ui.esc(box.away.team.name) + '</span>' +
@@ -97,7 +110,7 @@
         '<div class="report-center">' + ui.esc(meta) + ' · Home score listed first' +
           (game.notes ? ' · ' + game.notes : '') + '</div>' +
       '</div>' +
-      boxTable(box.home) + boxTable(box.away) + quarterHtml(game, state) +
+      boxTable(box.home, state) + boxTable(box.away, state) + quarterHtml(game, state) +
       '<div class="report-center">FG / 3PT / FT shown as makes–attempts. ' +
         'Team totals include ' + game.stats.length + ' player lines.</div>';
   }
@@ -112,7 +125,7 @@
       (r.gp ? (r.pct * 100).toFixed(1) + '%' : '—') + '</td>' +
       '<td class="align-right">' + ui.esc(r.gb) + '</td><td class="align-right">' + r.pf + '</td>' +
       '<td class="align-right">' + r.pa + '</td><td class="align-right">' +
-      (r.diff > 0 ? '+' : '') + r.diff + '</td>' +
+      ui.fmtSigned(r.diff) + '</td>' +
       '<td class="align-right">' + (r.gp ? ui.fmt1(r.pfPerGame) : '—') + '</td>' +
       '<td class="align-right">' + (r.gp ? ui.fmt1(r.paPerGame) : '—') + '</td>' +
       '<td class="align-right">' + r.home.w + '–' + r.home.l + '</td>' +
@@ -123,33 +136,117 @@
       '<div class="report-section"><table><thead><tr>' +
       cols.map((c, i) => '<th' + (i > 1 ? ' class="align-right"' : '') + '>' + c + '</th>').join('') +
       '</tr></thead><tbody>' + body + '</tbody></table>' +
-      '<div class="report-center" style="text-align:left">* marks your team. ' +
+      '<div class="report-center report-left">* marks your team. ' +
       'PCT = (wins + ½ ties) / games. GB = games behind the leader. ' +
       state.games.filter(g => g.status === 'final').length + ' final games included.</div></div>';
   }
 
   function rosterHtml(state) {
-    const players = state.players.slice().sort((a, b) =>
-      String(teamName(state, a.teamId)).localeCompare(String(teamName(state, b.teamId))) ||
-      (Number(a.number) || 999) - (Number(b.number) || 999));
     return '<div class="report-section"><h3>League rosters</h3>' +
       '<div class="report-two-col">' + state.teams.map(t => {
-        const list = players.filter(p => p.teamId === t.id);
-        return '<div><h4>' + ui.esc(t.name) + '</h4><table><thead><tr><th>#</th><th>Player</th><th>Pos</th></tr></thead>' +
-          '<tbody>' + (list.length ? list.map(p => '<tr><td>' + ui.esc(p.number) + '</td><td>' +
-            ui.esc(p.name) + '</td><td>' + ui.esc(p.position || '—') + '</td></tr>').join('') :
+        const list = state.players.filter(p => p.teamId === t.id)
+          .sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999));
+        return '<div><h4>' + ui.esc(t.name) + '</h4>' +
+          '<table><thead><tr><th>#</th><th>Player</th><th>Pos</th></tr></thead>' +
+          '<tbody>' + (list.length ? list.map(p =>
+            '<tr><td>' + ui.esc(p.number) + '</td>' +
+            '<td class="player-print-cell">' + ui.avatar(p, { size: 'sm', team: t, showNumber: false }) +
+              ' <span>' + ui.esc(p.name) + '</span></td>' +
+            '<td>' + ui.esc(p.position || '—') + '</td></tr>').join('') :
             '<tr><td colspan="3">No players listed.</td></tr>') + '</tbody></table></div>';
       }).join('') + '</div></div>';
   }
 
+  /* Printable player profile: photo, averages, splits, game log, zones. */
+  function playerHtml(state, player) {
+    const team = teamOf(state, player.teamId);
+    const agg = st.playerAggregate(player.id, state.games);
+    const per = an.per36(agg);
+    const splits = st.shooting(agg.totals);
+    const streak = an.streaks(player.id, state.games);
+    const log = TBS.profiles.gameLog(state, player);
+    const shots = TBS.profiles.allShots(state, player.id);
+    const pm = TBS.profiles.totalPlusMinus(state, player.id);
+
+    const avgRows = [
+      ['Games played', ui.fmtInt(agg.gp)],
+      ['Minutes', ui.fmtInt(agg.totals.min) + ' (' + ui.fmt1(agg.mpg) + ' MPG)'],
+      ['Points', ui.fmtInt(agg.totals.pts) + ' (' + ui.fmt1(agg.ppg) + ' PPG)'],
+      ['Rebounds', ui.fmtInt(agg.totals.reb) + ' (' + ui.fmt1(agg.rpg) + ' RPG)'],
+      ['Assists', ui.fmtInt(agg.totals.ast) + ' (' + ui.fmt1(agg.apg) + ' APG)'],
+      ['Steals / Blocks', ui.fmtInt(agg.totals.stl) + ' / ' + ui.fmtInt(agg.totals.blk)],
+      ['Turnovers', ui.fmtInt(agg.totals.tov)],
+      ['FG / 3PT / FT', ui.fmtPct(splits.fgPct) + ' · ' + ui.fmtPct(splits.tpPct) + ' · ' + ui.fmtPct(splits.ftPct)],
+      ['eFG% / TS%', ui.fmtPct(splits.efgPct) + ' / ' + ui.fmtPct(splits.tsPct)],
+      ['Per 36 minutes', ui.fmt1(per.pts) + ' PTS · ' + ui.fmt1(per.reb) + ' REB · ' + ui.fmt1(per.ast) + ' AST'],
+      ['Form', streak.label + ' · last five ' + ui.fmt1(streak.recentAvg) + ' PPG'],
+      ['+/−', pm.games ? ui.fmtSigned(pm.total) + ' across ' + pm.games + ' tracked games' : '—']
+    ];
+
+    return head('Player Report', player.name + ' · ' + (team ? team.name : 'No team') +
+      ' · Season ' + state.league.season, state) +
+      '<div class="report-section report-profile-head">' +
+        '<div class="report-profile-photo">' + ui.avatar(player, { size: 'xl', team: team }) + '</div>' +
+        '<div>' +
+          '<h3 class="report-profile-name">' + ui.esc(player.name) +
+            ' <span class="report-profile-number">#' + ui.esc(player.number) + '</span></h3>' +
+          '<div class="report-center report-left">' +
+            ui.esc(team ? team.name : 'No team') + ' · ' + ui.esc(player.position || 'No position') +
+            ' · ' + (player.active === false ? 'Inactive' : 'Active') +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="report-section"><h3>Season summary</h3><table><tbody>' +
+        avgRows.map(row => '<tr><td><strong>' + ui.esc(row[0]) + '</strong></td>' +
+          '<td class="align-right">' + ui.esc(row[1]) + '</td></tr>').join('') +
+      '</tbody></table></div>' +
+      (log.length ? '<div class="report-section"><h3>Game log</h3><table><thead><tr>' +
+        '<th>Date</th><th>Opponent</th><th>Res</th><th class="align-right">MIN</th>' +
+        '<th class="align-right">PTS</th><th class="align-right">REB</th>' +
+        '<th class="align-right">AST</th><th class="align-right">STL</th>' +
+        '<th class="align-right">BLK</th><th class="align-right">TOV</th>' +
+        '<th class="align-right">FG</th><th class="align-right">3PT</th>' +
+        '<th class="align-right">FT</th><th class="align-right">+/−</th></tr></thead><tbody>' +
+        log.map(row => '<tr><td>' + ui.fmtDate(row.game.date) + '</td>' +
+          '<td>' + (row.home ? 'vs ' : '@ ') + ui.esc(row.opponent) + '</td>' +
+          '<td>' + row.result + '</td>' +
+          '<td class="align-right">' + ui.fmtInt(row.line.min) + '</td>' +
+          '<td class="align-right"><strong>' + ui.fmtInt(row.line.pts) + '</strong></td>' +
+          '<td class="align-right">' + ui.fmtInt(row.line.reb) + '</td>' +
+          '<td class="align-right">' + ui.fmtInt(row.line.ast) + '</td>' +
+          '<td class="align-right">' + ui.fmtInt(row.line.stl) + '</td>' +
+          '<td class="align-right">' + ui.fmtInt(row.line.blk) + '</td>' +
+          '<td class="align-right">' + ui.fmtInt(row.line.tov) + '</td>' +
+          '<td class="align-right">' + ui.fmtInt(row.line.fgm) + '/' + ui.fmtInt(row.line.fga) + '</td>' +
+          '<td class="align-right">' + ui.fmtInt(row.line.tpm) + '/' + ui.fmtInt(row.line.tpa) + '</td>' +
+          '<td class="align-right">' + ui.fmtInt(row.line.ftm) + '/' + ui.fmtInt(row.line.fta) + '</td>' +
+          '<td class="align-right">' + (an.plusMinus(row.game).tracked
+            ? ui.fmtSigned(row.plusMinus) : '—') + '</td></tr>').join('') +
+        '</tbody></table></div>'
+        : '<div class="report-section"><h3>Game log</h3><p>No final games recorded yet.</p></div>') +
+      (shots.zones.length ? '<div class="report-section"><h3>Shot zones</h3><table><thead><tr>' +
+        '<th>Zone</th><th class="align-right">Make</th><th class="align-right">Att</th>' +
+        '<th class="align-right">%</th></tr></thead><tbody>' +
+        shots.zones.map(z => '<tr><td>' + ui.esc(z.zone) + '</td>' +
+          '<td class="align-right">' + z.made + '</td>' +
+          '<td class="align-right">' + z.attempts + '</td>' +
+          '<td class="align-right">' + ui.fmtPct(z.pct) + '</td></tr>').join('') +
+        '</tbody></table></div>' : '') +
+      foot('Player report · ' + player.name);
+  }
+
+  function currentGame(state) {
+    const gameId = qs('#report-game-select').value;
+    return state.games.find(g => g.id === gameId) ||
+      st.sortByDateDesc(state.games.filter(g => g.status === 'final'))[0] ||
+      st.sortByDateDesc(state.games)[0] || null;
+  }
+
   function build(state) {
     const type = qs('#report-type').value;
-    const gameId = qs('#report-game-select').value;
-    const game = state.games.find(g => g.id === gameId) ||
-      state.games.filter(g => g.status === 'final').slice(-1)[0] ||
-      state.games[state.games.length - 1];
     const sheet = qs('#report-sheet');
     const meta = qs('#report-meta');
+    const game = currentGame(state);
 
     if (type === 'boxscore') {
       sheet.innerHTML = game
@@ -165,6 +262,16 @@
         foot('Standings · ' + state.teams.length + ' teams · ' + state.players.length + ' players');
       meta.textContent = 'Standings + rosters · ' + state.teams.length + ' teams · ' +
         state.games.filter(g => g.status === 'final').length + ' final games.';
+    } else if (type === 'player') {
+      const playerId = qs('#report-player-select') ? qs('#report-player-select').value : '';
+      const player = state.players.find(p => p.id === playerId) || state.players[0];
+      sheet.innerHTML = player
+        ? playerHtml(state, player)
+        : ui.emptyState('No players yet', 'Add a player in Teams & Roster first.');
+      meta.textContent = player
+        ? 'Player report · ' + player.name + ' · ' + st.playerAggregate(player.id, state.games).gp +
+          ' final games.'
+        : 'No players available.';
     } else {
       const finals = state.games.filter(g => g.status === 'final').sort((a, b) =>
         String(a.date).localeCompare(String(b.date)));
@@ -185,11 +292,28 @@
   function render(state) {
     const select = qs('#report-game-select');
     const previous = select.value;
-    const sorted = state.games.slice().sort((a, b) =>
-      String(b.date + b.time).localeCompare(String(a.date + a.time)));
+    const sorted = st.sortByDateDesc(state.games);
     select.innerHTML = ui.gameOptions(sorted, state.teams, previous, '');
     if (previous && Array.from(select.options).some(o => o.value === previous)) select.value = previous;
-    qs('#report-game-wrap').hidden = qs('#report-type').value !== 'boxscore';
+
+    const playerSelect = qs('#report-player-select');
+    if (playerSelect) {
+      const previousPlayer = playerSelect.value;
+      const players = state.players.slice().sort((a, b) =>
+        String(teamName(state, a.teamId)).localeCompare(String(teamName(state, b.teamId))) ||
+        (Number(a.number) || 999) - (Number(b.number) || 999));
+      playerSelect.innerHTML = ui.options(players.map(p => ({
+        value: p.id, label: '#' + p.number + ' ' + p.name + ' · ' + teamName(state, p.teamId)
+      })), previousPlayer);
+      if (previousPlayer && Array.from(playerSelect.options).some(o => o.value === previousPlayer)) {
+        playerSelect.value = previousPlayer;
+      }
+    }
+
+    const type = qs('#report-type').value;
+    qs('#report-game-wrap').hidden = type !== 'boxscore';
+    const playerWrap = qs('#report-player-wrap');
+    if (playerWrap) playerWrap.hidden = type !== 'player';
     build(state);
   }
 
@@ -198,20 +322,31 @@
     qs('#report-type').value = 'boxscore';
     const select = qs('#report-game-select');
     if (gameId && Array.from(select.options).some(o => o.value === gameId)) select.value = gameId;
-    build(TBS.app.getState());
+    render(TBS.app.getState());
     setTimeout(() => window.print(), 120);
   }
 
   function printStandings() {
     TBS.app.go('reports');
     qs('#report-type').value = 'standings';
-    build(TBS.app.getState());
+    render(TBS.app.getState());
+    setTimeout(() => window.print(), 120);
+  }
+
+  function printPlayer(playerId) {
+    TBS.app.go('reports');
+    qs('#report-type').value = 'player';
+    const select = qs('#report-player-select');
+    if (select && Array.from(select.options).some(o => o.value === playerId)) select.value = playerId;
+    render(TBS.app.getState());
     setTimeout(() => window.print(), 120);
   }
 
   function init() {
     qs('#report-type').addEventListener('change', () => render(TBS.app.getState()));
     qs('#report-game-select').addEventListener('change', () => render(TBS.app.getState()));
+    const playerSelect = qs('#report-player-select');
+    if (playerSelect) playerSelect.addEventListener('change', () => render(TBS.app.getState()));
     qs('#report-build-btn').addEventListener('click', () => {
       render(TBS.app.getState());
       ui.toast('Report rebuilt from current data.', 'success');
@@ -221,7 +356,7 @@
 
   TBS.reports = {
     render: render, init: init, build: build,
-    printBoxScore: printBoxScore, printStandings: printStandings,
-    boxScoreHtml: boxScoreHtml, standingsHtml: standingsHtml
+    printBoxScore: printBoxScore, printStandings: printStandings, printPlayer: printPlayer,
+    boxScoreHtml: boxScoreHtml, standingsHtml: standingsHtml, playerHtml: playerHtml
   };
 })(window.TBS = window.TBS || {});

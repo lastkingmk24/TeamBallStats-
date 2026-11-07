@@ -1,6 +1,7 @@
 /* =========================================================================
- * stats.js — pure calculation helpers (no DOM, no storage writes)
+ * stats.js — pure calculation helpers (no DOM, no storage writes).
  * Everything here is deterministic and independently testable.
+ * Advanced metrics that build on top of these live in js/analytics.js.
  * ========================================================================= */
 (function (TBS) {
   'use strict';
@@ -8,7 +9,7 @@
   const FIELDS = ['pts', 'reb', 'ast', 'stl', 'blk', 'tov',
     'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta', 'pf', 'min'];
 
-  const isFinal = g => g && g.status === 'final';
+  const isFinal = g => !!g && g.status === 'final';
   const num = v => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
   function sumLines(lines) {
@@ -29,6 +30,22 @@
     return count > 0 ? total / count : 0;
   }
 
+  /* Shooting splits derived from one totals bag (stat line, season or game). */
+  function shooting(totals) {
+    const t = totals || {};
+    const fga = num(t.fga);
+    const tpa = num(t.tpa);
+    const fta = num(t.fta);
+    const denom = 2 * (fga + 0.44 * fta);
+    return {
+      fgPct: pct(t.fgm, fga),
+      tpPct: pct(t.tpm, tpa),
+      ftPct: pct(t.ftm, fta),
+      efgPct: pct(num(t.fgm) + 0.5 * num(t.tpm), fga),
+      tsPct: denom > 0 ? (num(t.pts) / denom) * 100 : null
+    };
+  }
+
   /* Per-player season averages + shooting splits. */
   function playerAggregate(playerId, games) {
     const played = (games || []).filter(g =>
@@ -37,13 +54,12 @@
     const lines = played.map(g => (g.stats || []).find(s => s.playerId === playerId));
     const totals = sumLines(lines);
     const gp = played.length;
-    const fga = totals.fga;
-    const tpa = totals.tpa;
-    const fta = totals.fta;
-    const tsDenominator = 2 * (fga + 0.44 * fta);
+    const splits = shooting(totals);
 
     return {
       gp: gp,
+      games: played,
+      lines: lines,
       totals: totals,
       ppg: avg(totals.pts, gp),
       rpg: avg(totals.reb, gp),
@@ -52,11 +68,11 @@
       bpg: avg(totals.blk, gp),
       topg: avg(totals.tov, gp),
       mpg: avg(totals.min, gp),
-      fgPct: pct(totals.fgm, fga),
-      tpPct: pct(totals.tpm, tpa),
-      ftPct: pct(totals.ftm, fta),
-      efgPct: pct(totals.fgm + 0.5 * totals.tpm, fga),
-      tsPct: tsDenominator > 0 ? (totals.pts / tsDenominator) * 100 : null
+      fgPct: splits.fgPct,
+      tpPct: splits.tpPct,
+      ftPct: splits.ftPct,
+      efgPct: splits.efgPct,
+      tsPct: splits.tsPct
     };
   }
 
@@ -75,11 +91,15 @@
     );
   }
 
+  function sortByDateDesc(list) {
+    return list.slice().sort((a, b) =>
+      String(b.date + (b.time || '')).localeCompare(String(a.date + (a.time || '')))
+    );
+  }
+
   function streakOf(gameList, teamId) {
     if (!gameList.length) return '—';
-    const ordered = gameList.slice().sort((a, b) =>
-      String(b.date + b.time).localeCompare(String(a.date + a.time))
-    );
+    const ordered = sortByDateDesc(gameList);
     const letter = resultFor(ordered[0], teamId);
     if (letter === 'T') return 'T1';
     let count = 0;
@@ -97,8 +117,7 @@
     const rec = {
       w: 0, l: 0, t: 0, gp: list.length, pf: 0, pa: 0, diff: 0, pct: 0,
       home: { w: 0, l: 0, t: 0 }, away: { w: 0, l: 0, t: 0 },
-      streak: '—', lastFive: [],
-      pfPerGame: 0, paPerGame: 0
+      streak: '—', lastFive: [], pfPerGame: 0, paPerGame: 0
     };
 
     list.forEach(g => {
@@ -119,9 +138,7 @@
     rec.pfPerGame = avg(rec.pf, rec.gp);
     rec.paPerGame = avg(rec.pa, rec.gp);
     rec.streak = streakOf(list, id);
-    rec.lastFive = list.slice().sort((a, b) =>
-      String(b.date + b.time).localeCompare(String(a.date + a.time))
-    ).slice(0, 5).map(g => resultFor(g, id));
+    rec.lastFive = sortByDateDesc(list).slice(0, 5).map(g => resultFor(g, id));
     return rec;
   }
 
@@ -161,7 +178,7 @@
     const home = new Array(count).fill(0);
     const away = new Array(count).fill(0);
     const tracked = new Array(count).fill(false);
-    (game.events || []).forEach(e => {
+    ((game && game.events) || []).forEach(e => {
       if (!num(e.scoreDelta)) return;
       const idx = Math.min(count, Math.max(1, num(e.quarter) || 1)) - 1;
       if (e.teamId === game.homeTeamId) home[idx] += num(e.scoreDelta);
@@ -176,14 +193,14 @@
   function gameBox(game, players, teams, league) {
     function side(teamId, score) {
       const team = (teams || []).find(t => t.id === teamId) ||
-        { id: teamId, name: 'Unknown Team', short: 'UNK' };
+        { id: teamId, name: 'Unknown Team', short: 'UNK', color: '' };
       const rows = (game.stats || []).filter(s => s.teamId === teamId).map(line => {
         const player = (players || []).find(p => p.id === line.playerId);
         const stats = {};
         FIELDS.forEach(f => { stats[f] = num(line[f]); });
         return {
           playerId: line.playerId,
-          player: player || { name: 'Former player', number: '—', position: '' },
+          player: player || { id: line.playerId, name: 'Former player', number: '—', position: '' },
           stats: stats
         };
       });
@@ -191,12 +208,13 @@
         (Number(a.player.number) || 999) - (Number(b.player.number) || 999) ||
         String(a.player.name).localeCompare(String(b.player.name))
       );
+      const totals = sumLines((game.stats || []).filter(s => s.teamId === teamId));
       return {
         team: team,
         score: num(score),
         rows: rows,
-        totals: sumLines((game.stats || []).filter(s => s.teamId === teamId)),
-        computedScore: sumLines((game.stats || []).filter(s => s.teamId === teamId)).pts
+        totals: totals,
+        computedScore: totals.pts
       };
     }
     return {
@@ -214,24 +232,25 @@
       agg: playerAggregate(player.id, games)
     })).filter(x => x.agg.gp > 0);
 
-    function top(key, getter) {
+    function top(getter) {
       return all.slice().sort((a, b) => getter(b) - getter(a))
         .slice(0, 5).map(x => ({
           player: x.player,
           value: getter(x),
-          gp: x.agg.gp
+          gp: x.agg.gp,
+          agg: x.agg
         }));
     }
     return {
-      ppg: top('ppg', x => x.agg.ppg),
-      rpg: top('rpg', x => x.agg.rpg),
-      apg: top('apg', x => x.agg.apg),
-      spg: top('spg', x => x.agg.spg),
-      bpg: top('bpg', x => x.agg.bpg),
+      ppg: top(x => x.agg.ppg),
+      rpg: top(x => x.agg.rpg),
+      apg: top(x => x.agg.apg),
+      spg: top(x => x.agg.spg),
+      bpg: top(x => x.agg.bpg),
       fgPct: all.filter(x => x.agg.totals.fga >= minFGA)
         .sort((a, b) => b.agg.fgPct - a.agg.fgPct)
         .slice(0, 5).map(x => ({
-          player: x.player, value: x.agg.fgPct, gp: x.agg.gp
+          player: x.player, value: x.agg.fgPct, gp: x.agg.gp, agg: x.agg
         }))
     };
   }
@@ -241,7 +260,8 @@
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
 
-  /* Full player-statistics CSV (properly escaped: names may contain commas). */
+  /* Full player-statistics CSV (properly escaped: names may contain commas).
+   * Deliberately unchanged by v3: photos never enter the CSV. */
   function toCSV(players, games, teams) {
     const header = [
       'Player', '#', 'Position', 'Team', 'GP', 'MIN', 'PTS', 'PPG', 'REB', 'RPG',
@@ -250,7 +270,7 @@
       'eFG%', 'TS%', 'PF'
     ];
     const round1 = v => (Math.round(v * 10) / 10).toFixed(1);
-    const pctCell = v => (v === null ? '' : round1(v));
+    const pctCell = v => (v === null || v === undefined ? '' : round1(v));
     const rows = (players || []).map(p => {
       const a = playerAggregate(p.id, games);
       const team = (teams || []).find(t => t.id === p.teamId);
@@ -268,13 +288,32 @@
     return [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
   }
 
+  /* Games filtered by season tag. Games without a tag belong to the current
+   * league season, so v1/v2 data always shows up in the season filter. */
+  function gamesForSeason(games, season, leagueSeason) {
+    if (!season || season === 'all') return (games || []).slice();
+    return (games || []).filter(g => (g.season || leagueSeason) === season);
+  }
+
+  function seasonsOf(games, leagueSeason) {
+    const out = [];
+    (games || []).forEach(g => {
+      const s = g.season || leagueSeason;
+      if (s && out.indexOf(s) < 0) out.push(s);
+    });
+    out.sort();
+    return out;
+  }
+
   TBS.stats = {
     FIELDS: FIELDS,
     sumLines: sumLines,
     pct: pct,
     avg: avg,
+    shooting: shooting,
     isFinal: isFinal,
     resultFor: resultFor,
+    teamGames: teamGames,
     playerAggregate: playerAggregate,
     teamRecord: teamRecord,
     standings: standings,
@@ -282,6 +321,9 @@
     gameBox: gameBox,
     leaderboard: leaderboard,
     toCSV: toCSV,
-    csvCell: csvCell
+    csvCell: csvCell,
+    sortByDateDesc: sortByDateDesc,
+    gamesForSeason: gamesForSeason,
+    seasonsOf: seasonsOf
   };
 })(window.TBS = window.TBS || {});

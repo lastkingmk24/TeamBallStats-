@@ -1,11 +1,13 @@
 /* =========================================================================
- * boxscores.js — full two-team box scores, manual editing, quarter scoring.
+ * boxscores.js — full two-team box scores, manual stat editing, quarter
+ * scoring, +/− from the play-by-play, plus game-flow and shot-chart canvases.
  * ========================================================================= */
 (function (TBS) {
   'use strict';
 
   const ui = TBS.ui;
   const st = TBS.stats;
+  const an = TBS.analytics;
   const storage = TBS.storage;
   const qs = ui.qs;
 
@@ -16,6 +18,10 @@
   const EDIT_FIELDS = ['min', 'pts', 'reb', 'ast', 'stl', 'blk', 'tov',
     'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta', 'pf'];
 
+  function teamOf(state, id) {
+    return state.teams.find(x => x.id === id) || null;
+  }
+
   function teamName(state, id) {
     const t = state.teams.find(x => x.id === id);
     return t ? t.name : 'Unknown team';
@@ -24,9 +30,9 @@
   function activeGame(state) {
     let game = state.games.find(g => g.id === selectedGameId);
     if (!game) {
-      const finals = state.games.filter(g => g.status === 'final');
+      const finals = st.sortByDateDesc(state.games.filter(g => g.status === 'final'));
       const live = state.games.filter(g => g.status === 'live');
-      game = finals[finals.length - 1] || live[0] || state.games[state.games.length - 1] || null;
+      game = finals[0] || live[0] || st.sortByDateDesc(state.games)[0] || null;
       selectedGameId = game ? game.id : null;
     }
     return game;
@@ -57,11 +63,12 @@
       (p === null ? '' : ' <span class="muted">(' + ui.fmtPct(p) + ')</span>');
   }
 
-  function sideTable(side, state) {
+  function sideTable(side, state, game) {
+    const pm = an.plusMinus(game).byPlayer;
     const columns = [
-      { label: '#', render: r => ui.esc(r.player.number) },
-      { label: 'Player', render: r => '<strong>' + ui.esc(r.player.name) + '</strong>' +
-          (r.player.position ? ' <span class="muted">' + ui.esc(r.player.position) + '</span>' : '') },
+      { label: 'Player', render: r => ui.playerCell(r.player, {
+          team: teamOf(state, r.player.teamId), size: 'md', showNumber: false,
+          sub: r.player.position || '' }) },
       { label: 'MIN', render: r => ui.fmtInt(r.stats.min), align: 'right' },
       { label: 'PTS', render: r => '<strong>' + ui.fmtInt(r.stats.pts) + '</strong>', align: 'right' },
       { label: 'REB', render: r => ui.fmtInt(r.stats.reb), align: 'right' },
@@ -72,22 +79,32 @@
       { label: 'FG', render: r => shooting(r.stats.fgm, r.stats.fga), align: 'right' },
       { label: '3PT', render: r => shooting(r.stats.tpm, r.stats.tpa), align: 'right' },
       { label: 'FT', render: r => shooting(r.stats.ftm, r.stats.fta), align: 'right' },
+      { label: '+/−', render: r => pm[r.playerId] === undefined ? '—' :
+          ui.fmtSigned(pm[r.playerId]), align: 'right' },
       { label: 'PF', render: r => ui.fmtInt(r.stats.pf), align: 'right' }
     ];
     const t = side.totals;
     const foot = [
-      '<strong>TOTALS</strong>', '', ui.fmtInt(t.min), ui.fmtInt(t.pts), ui.fmtInt(t.reb),
+      '<strong>TOTALS</strong>', ui.fmtInt(t.min), ui.fmtInt(t.pts), ui.fmtInt(t.reb),
       ui.fmtInt(t.ast), ui.fmtInt(t.stl), ui.fmtInt(t.blk), ui.fmtInt(t.tov),
-      shooting(t.fgm, t.fga), shooting(t.tpm, t.tpa), shooting(t.ftm, t.fta), ui.fmtInt(t.pf)
+      shooting(t.fgm, t.fga), shooting(t.tpm, t.tpa), shooting(t.ftm, t.fta),
+      an.plusMinus(game).tracked ? ui.fmtSigned(
+        side.score - (game.homeTeamId === side.team.id ? game.awayScore : game.homeScore)
+      ) : '—',
+      ui.fmtInt(t.pf)
     ];
-    return '<div class="box-section-title"><h3>' + ui.esc(side.team.name) + '</h3>' +
+    const team = side.team;
+    return '<div class="box-section-title"' +
+      (team.color ? ' style="--team-color:' + ui.esc(team.color) + '"' : '') + '>' +
+      '<h3><span class="team-dot" style="--team-color:' + ui.esc(team.color || '#94a3b8') + '"></span>' +
+        ui.esc(team.name) + '</h3>' +
       '<span class="score-tag">' + ui.fmtInt(side.score) + '</span></div>' +
       ui.table(columns, side.rows, {
         empty: 'No player lines for this team. Use “Edit box score” to add them.',
         foot: foot,
-        caption: ui.fmtPct(st.pct(t.fgm, t.fga)) + ' FG · ' +
-          ui.fmtPct(st.pct(t.tpm, t.tpa)) + ' 3PT · ' +
-          ui.fmtPct(st.pct(t.ftm, t.fta)) + ' FT'
+        caption: 'FG ' + ui.fmtPct(st.pct(t.fgm, t.fga)) + ' · 3PT ' +
+          ui.fmtPct(st.pct(t.tpm, t.tpa)) + ' · FT ' + ui.fmtPct(st.pct(t.ftm, t.fta)) +
+          ' · eFG ' + ui.fmtPct(st.shooting(t).efgPct) + ' · TS ' + ui.fmtPct(st.shooting(t).tsPct)
       });
   }
 
@@ -108,7 +125,8 @@
     });
     return '<h3 class="subhead">Scoring by quarter</h3>' +
       '<div class="quarter-table">' + ui.table(cols, rows) + '</div>' +
-      '<p class="footnote">Quarter totals come from live-console plays. Manual score adjustments are included; box-score edits are not.</p>';
+      '<p class="footnote">Quarter totals come from live-console plays. Manual score adjustments are included; ' +
+        'box-score edits are not.</p>';
   }
 
   function editorTable(state, teamId, title) {
@@ -144,11 +162,30 @@
       head + '<tbody>' + body + '</tbody></table></div></div>' + addRow;
   }
 
+  function drawCharts(game, state) {
+    const flowCanvas = qs('#box-flow');
+    if (flowCanvas) {
+      const homeTeam = teamOf(state, game.homeTeamId);
+      const awayTeam = teamOf(state, game.awayTeamId);
+      TBS.shotchart.drawFlow(flowCanvas, an.gameFlow(game), {
+        homeColor: (homeTeam && homeTeam.color) || '#c8102e',
+        awayColor: (awayTeam && awayTeam.color) || '#1d4ed8',
+        quarters: state.league.quarters
+      });
+    }
+    const shotCanvas = qs('#box-shots');
+    if (shotCanvas) {
+      const colorsByTeam = {};
+      state.teams.forEach(t => { colorsByTeam[t.id] = t.color || '#c8102e'; });
+      const shots = an.shotZones(game).shots;
+      TBS.shotchart.drawShots(shotCanvas, shots, { teamColorMap: colorsByTeam });
+    }
+  }
+
   function render(state) {
     const select = qs('#box-game-select');
-    const sorted = state.games.slice().sort((a, b) =>
-      String(b.date + b.time).localeCompare(String(a.date + a.time))
-    );
+    if (!select) return;
+    const sorted = st.sortByDateDesc(state.games);
     select.innerHTML = ui.gameOptions(sorted, state.teams, selectedGameId, '');
     const game = activeGame(state);
     if (selectedGameId) select.value = selectedGameId;
@@ -200,6 +237,9 @@
     const resultText = game.status === 'final'
       ? (box.result === 'T' ? 'Tie' : (box.home.score > box.away.score ? box.home.team.name : box.away.team.name) + ' won')
       : (game.status === 'live' ? 'In progress' : 'Not started');
+    const shots = an.shotZones(game);
+    const flow = an.gameFlow(game);
+
     host.innerHTML =
       '<div class="box-header">' +
         '<div class="matchup">' +
@@ -213,10 +253,29 @@
           ' · ' + ui.esc(resultText) +
           (game.notes ? ' · ' + ui.esc(game.notes) : '') + '</div>' +
       '</div>' +
-      sideTable(box.away, state) + sideTable(box.home, state) +
+      sideTable(box.away, state, game) + sideTable(box.home, state, game) +
       quarterTable(game, state) +
+      '<div class="chart-grid">' +
+        '<div class="chart-card">' +
+          '<h4>Game flow</h4>' +
+          '<p class="chart-note">Cumulative margin from the play-by-play. Above the line = home lead.</p>' +
+          '<canvas id="box-flow" class="chart-canvas" role="img" ' +
+            'aria-label="Game flow chart for this game"></canvas>' +
+        '</div>' +
+        '<div class="chart-card">' +
+          '<h4>Shot chart</h4>' +
+          '<p class="chart-note">' + (shots.total
+            ? shots.made + ' made of ' + shots.total + ' located shots (' + ui.fmtPct(shots.pct) + ')'
+            : 'No shot locations recorded — mark a spot in the Live Console before shooting.') + '</p>' +
+          '<canvas id="box-shots" class="chart-canvas shot-canvas" role="img" ' +
+            'aria-label="Shot chart for this game"></canvas>' +
+        '</div>' +
+      '</div>' +
       '<p class="footnote">Box score shows ' + game.stats.length + ' player lines and ' +
-        game.events.length + ' logged plays. Tip: edit any line manually with “Edit box score”.</p>';
+        game.events.length + ' logged plays · ' + flow.points.length + ' scoring plays tracked. ' +
+        'Tip: edit any line manually with “Edit box score”.</p>';
+
+    drawCharts(game, state);
   }
 
   function init() {
@@ -228,8 +287,9 @@
     });
 
     qs('#box-edit-btn').addEventListener('click', () => {
+      const game = activeGame(TBS.app.getState());
       if (editMode) { editMode = false; draft = null; }
-      else { editMode = true; draft = makeDraft(activeGame(TBS.app.getState())); }
+      else if (game) { editMode = true; draft = makeDraft(game); }
       render(TBS.app.getState());
     });
 
@@ -272,6 +332,7 @@
       if (!game) return;
 
       if (action === 'add-line') {
+        if (!draft) draft = makeDraft(game);
         const teamId = btn.dataset.teamId;
         const sel = ui.qsa('[data-add-select]', host)
           .find(el => el.dataset.addSelect === teamId);
@@ -280,6 +341,7 @@
         draft.stats.push(storage.blankStats(playerId, teamId));
         render(state);
       } else if (action === 'remove-line') {
+        if (!draft) return;
         draft.stats = draft.stats.filter(s =>
           !(s.playerId === btn.dataset.playerId && s.teamId === btn.dataset.teamId));
         render(state);
@@ -288,24 +350,26 @@
         draft = null;
         render(state);
       } else if (action === 'save-box') {
+        if (!draft) return;
         const status = storage.STATUSES.indexOf(draft.status) >= 0 ? draft.status : game.status;
+        const payload = draft;
         /* Leave edit mode BEFORE commit: commit() re-renders every view. */
         editMode = false;
+        draft = null;
         TBS.app.commit(d => {
           const g = d.games.find(x => x.id === game.id);
           if (!g) return;
-          g.stats = draft.stats.map(s => {
+          g.stats = payload.stats.map(s => {
             const line = storage.blankStats(s.playerId, s.teamId);
             EDIT_FIELDS.forEach(f => { line[f] = Math.max(0, storage.num(s[f], 0)); });
             return line;
           });
-          g.homeScore = draft.homeScore;
-          g.awayScore = draft.awayScore;
-          g.notes = draft.notes;
+          g.homeScore = payload.homeScore;
+          g.awayScore = payload.awayScore;
+          g.notes = payload.notes;
           g.status = status;
           if (status !== 'live') g.clockRunningSince = null;
         });
-        draft = null;
         ui.toast('Box score saved.', 'success');
       }
     });

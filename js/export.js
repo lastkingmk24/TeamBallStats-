@@ -1,7 +1,10 @@
 /* =========================================================================
- * export.js — Data tab: league settings, single-file JSON backup/restore and
- * the reset switch. Import goes through the SAME migration/validation path
- * as loadData(), so v1 backups and v2 backups are both accepted.
+ * export.js — Data tab: league settings (including the league default theme),
+ * single-file JSON backup/restore and the reset switch.
+ *
+ * Imports run through storage.coerce(), i.e. the EXACT same migration path as
+ * loadData(): v1, v2 and v3 documents are all accepted, and nothing is ever
+ * truncated. Merge never overwrites an existing team, player or game.
  * ========================================================================= */
 (function (TBS) {
   'use strict';
@@ -9,14 +12,17 @@
   const ui = TBS.ui;
   const storage = TBS.storage;
   const qs = ui.qs;
+
   let pending = null;
   let pendingName = '';
 
   function summaryHtml(counts, label) {
     return '<strong>' + ui.esc(label) + '</strong><br />' +
       'Schema v' + counts.version + ' · ' + counts.teams + ' teams · ' +
-      counts.players + ' players · ' + counts.games + ' games (' + counts.finalGames +
-      ' final) · ' + counts.statLines + ' player box-score lines · ' + counts.events + ' calendar events';
+      counts.players + ' players' + (counts.photos ? ' (' + counts.photos + ' with photos)' : '') + ' · ' +
+      counts.games + ' games (' + counts.finalGames + ' final) · ' +
+      counts.statLines + ' player box-score lines · ' + counts.playEvents + ' play-by-play events · ' +
+      counts.events + ' calendar events';
   }
 
   function setIfIdle(selector, value) {
@@ -25,11 +31,15 @@
     el.value = value;
   }
 
-  /* Merge by stable identity, remapping ids when a duplicate name exists. */
+  function key(text) {
+    return String(text || '').trim().toLowerCase();
+  }
+
+  /* Merge by stable identity, remapping ids when a duplicate name exists.
+   * Photos, team colours, seasons and lineups travel with the imported data. */
   function mergeData(current, incoming) {
     const out = storage.clone(current);
     const inc = storage.coerce(incoming);
-    const key = s => String(s || '').trim().toLowerCase();
 
     /* Teams: match on name, never import another "primary" flag. */
     const teamMap = {};
@@ -37,10 +47,13 @@
       const existing = out.teams.find(x => key(x.name) === key(t.name)) ||
         out.teams.find(x => x.id === t.id);
       if (existing) {
+        if (!existing.color && t.color) existing.color = t.color;
         teamMap[t.id] = existing.id;
       } else {
         const id = t.id && !out.teams.some(x => x.id === t.id) ? t.id : storage.uid('team');
-        out.teams.push({ id: id, name: t.name, short: t.short, primary: false });
+        out.teams.push({
+          id: id, name: t.name, short: t.short, color: t.color, primary: false
+        });
         teamMap[t.id] = id;
       }
     });
@@ -51,14 +64,16 @@
     inc.players.forEach(p => {
       const teamId = mapTeam(p.teamId);
       const existing = out.players.find(x => x.id === p.id) ||
-        out.players.find(x => x.teamId === teamId && Number(x.number) === Number(p.number) && key(x.name) === key(p.name));
+        out.players.find(x => x.teamId === teamId && Number(x.number) === Number(p.number) &&
+          key(x.name) === key(p.name));
       if (existing) {
+        if (!existing.photo && p.photo) existing.photo = p.photo;
         playerMap[p.id] = existing.id;
       } else {
         const id = p.id && !out.players.some(x => x.id === p.id) ? p.id : storage.uid('player');
         out.players.push({
           id: id, teamId: teamId, name: p.name, number: p.number,
-          position: p.position, active: p.active
+          position: p.position, active: p.active, photo: p.photo
         });
         playerMap[p.id] = id;
       }
@@ -80,6 +95,10 @@
         id: id,
         homeTeamId: homeTeamId,
         awayTeamId: awayTeamId,
+        lineup: {
+          home: ((g.lineup && g.lineup.home) || []).map(mapPlayer).filter(Boolean),
+          away: ((g.lineup && g.lineup.away) || []).map(mapPlayer).filter(Boolean)
+        },
         stats: g.stats.map(s => Object.assign({}, s, {
           playerId: mapPlayer(s.playerId),
           teamId: mapTeam(s.teamId)
@@ -104,6 +123,20 @@
     return storage.coerce(out);
   }
 
+  function migrationText(state) {
+    const upgrades = (state.meta && Array.isArray(state.meta.upgrades)) ? state.meta.upgrades : [];
+    if (!upgrades.length && !(state.meta && state.meta.migratedFrom)) {
+      return 'Schema v3 (no legacy migration needed).';
+    }
+    const steps = upgrades.map(step => 'v' + step.from + ' → v' + step.to).join(', ');
+    if (state.meta && state.meta.migratedFrom) {
+      return 'Upgraded in place from ' + state.meta.migratedFrom + ' on ' +
+        ui.fmtDate(String(state.meta.migratedAt || '').slice(0, 10)) +
+        (steps ? ' · steps: ' + steps : '') + '.';
+    }
+    return 'Upgraded in place' + (steps ? ' · steps: ' + steps : '') + '.';
+  }
+
   function render(state) {
     const primary = state.teams.find(t => t.id === state.league.primaryTeamId);
     setIfIdle('#setting-league-name', state.league.name);
@@ -111,17 +144,19 @@
     setIfIdle('#setting-team-name', primary ? primary.name : '');
     setIfIdle('#setting-quarters', state.league.quarters);
     setIfIdle('#setting-quarter-minutes', state.league.quarterMinutes);
+    setIfIdle('#setting-theme', state.league.theme || 'system');
 
-    let bytes = 0;
-    try { bytes = (localStorage.getItem(storage.DB_KEY) || '').length; } catch (_) {}
     const counts = storage.summarize(state);
-    qs('#storage-info').textContent =
-      'Stored under ' + storage.DB_KEY + ' · ~' + (bytes / 1024).toFixed(1) + ' KB · ' +
-      counts.players + ' players, ' + counts.games + ' games, ' + counts.events + ' events. ' +
-      (state.meta && state.meta.migratedFrom
-        ? 'Upgraded in place from ' + state.meta.migratedFrom + ' on ' + ui.fmtDate(state.meta.migratedAt ? state.meta.migratedAt.slice(0, 10) : '') + '.'
-        : 'Schema v2 (no legacy migration needed).') +
-      ' Export a JSON backup before resetting.';
+    const usage = storage.usage();
+    const themeChoice = TBS.theme && TBS.theme.readStored ? TBS.theme.readStored() : null;
+    qs('#storage-info').innerHTML =
+      'Stored under <code>' + storage.DB_KEY + '</code> · ~' + usage.database + ' KB league data · ' +
+      usage.kb + ' KB total in this browser · ' + counts.players + ' players (' +
+      counts.photos + ' photos), ' + counts.games + ' games, ' + counts.events + ' events. ' +
+      migrationText(state) + ' ' +
+      'Appearance: this device uses <strong>' + ui.esc(themeChoice || 'the OS preference') + '</strong>' +
+      ' (league default: ' + ui.esc(state.league.theme || 'system') + '). ' +
+      'Export a JSON backup before resetting.';
 
     const legacyBtn = qs('#export-legacy');
     legacyBtn.hidden = !storage.legacyBackup();
@@ -142,11 +177,14 @@
           throw new Error('Missing players/teams arrays');
         }
         pending = parsed;
-        qs('#import-summary').innerHTML = summaryHtml(storage.summarize(parsed), 'Ready: ' + pendingName);
+        const sourceVersion = storage.detectVersion(parsed);
+        qs('#import-summary').innerHTML = summaryHtml(storage.summarize(parsed),
+          'Ready: ' + pendingName + ' (source schema v' + sourceVersion + ')');
         ui.toast('Backup validated. Choose merge or replace, then import.', 'success');
       } catch (err) {
         pending = null;
-        qs('#import-summary').textContent = 'Invalid backup: ' + err.message + '. Expected a TeamBallStats JSON file.';
+        qs('#import-summary').textContent = 'Invalid backup: ' + err.message +
+          '. Expected a TeamBallStats JSON file.';
         ui.toast('That file is not a valid backup.', 'error');
       }
     };
@@ -165,20 +203,23 @@
       const season = qs('#setting-season').value.trim();
       const quarters = storage.num(qs('#setting-quarters').value, 4);
       const minutes = storage.num(qs('#setting-quarter-minutes').value, 10);
+      const themeField = qs('#setting-theme');
+      const themeValue = themeField ? storage.normalizeTheme(themeField.value) : 'system';
       if (!leagueName || !teamName) return;
       TBS.app.commit(d => {
         d.league.name = leagueName;
         d.league.season = season;
         d.league.quarters = Math.max(1, Math.min(8, Math.round(quarters)));
         d.league.quarterMinutes = Math.max(1, Math.min(60, Math.round(minutes)));
+        d.league.theme = themeValue;
         const t = d.teams.find(x => x.id === d.league.primaryTeamId);
         if (t) {
+          const previousAuto = t.name.slice(0, 3).toUpperCase();
           t.name = teamName;
-          if (!t.short || t.short === t.name.slice(0, 3).toUpperCase()) {
-            t.short = teamName.slice(0, 3).toUpperCase();
-          }
+          if (!t.short || t.short === previousAuto) t.short = teamName.slice(0, 3).toUpperCase();
         }
       });
+      if (TBS.theme) TBS.theme.refresh(themeValue);
       qs('#settings-save-info').textContent = 'Saved just now.';
       ui.toast('League settings saved.', 'success');
     });
@@ -186,13 +227,14 @@
     qs('#export-json').addEventListener('click', () => {
       const state = TBS.app.getState();
       const payload = Object.assign({}, state, {
+        version: storage.SCHEMA_VERSION,
         app: 'TeamBallStats',
         schema: storage.DB_KEY,
         exportedAt: new Date().toISOString()
       });
       if (ui.download('teamballstats-backup-' + storage.todayISO() + '.json',
           JSON.stringify(payload, null, 2), 'application/json')) {
-        ui.toast('Full JSON backup downloaded.', 'success');
+        ui.toast('Full JSON backup downloaded (schema v' + storage.SCHEMA_VERSION + ').', 'success');
       }
     });
 
@@ -206,11 +248,12 @@
 
     qs('#import-btn').addEventListener('click', () => {
       if (!pending) { ui.toast('Choose a valid .json backup first.', 'error'); return; }
-      const mode = (ui.qs('input[name="import-mode"]:checked') || {}).value || 'merge';
+      const mode = (qs('input[name="import-mode"]:checked') || {}).value || 'merge';
       if (mode === 'replace') {
-        if (!ui.confirmDanger('Replace ALL current data with this backup? This cannot be undone unless you export first.')) return;
+        if (!ui.confirmDanger('Replace ALL current data with this backup? ' +
+          'This cannot be undone unless you export first.')) return;
         TBS.app.replace(storage.coerce(pending));
-        ui.toast('Backup restored (replace).', 'success');
+        ui.toast('Backup restored (replace) · migrated to schema v' + storage.SCHEMA_VERSION + '.', 'success');
       } else {
         const merged = mergeData(TBS.app.getState(), pending);
         TBS.app.replace(merged);
@@ -222,7 +265,8 @@
     });
 
     qs('#reset-data').addEventListener('click', () => {
-      if (!ui.confirmDanger('Erase ALL data (teams, players, games, box scores, schedule and settings)? Export a backup first. This cannot be undone.')) return;
+      if (!ui.confirmDanger('Erase ALL data (teams, players, games, box scores, schedule and ' +
+        'settings)? Export a backup first. This cannot be undone.')) return;
       storage.resetData();
       TBS.app.replace(storage.defaultData());
       pending = null;

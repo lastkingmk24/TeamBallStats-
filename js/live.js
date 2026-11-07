@@ -1,20 +1,27 @@
 /* =========================================================================
  * live.js — live scoring console.
- * Clock, quarters, one-tap player stats, manual score adjustments,
- * play-by-play with undo, live box score and game finalization.
- * All changes are persisted to localStorage on every play.
+ *
+ * Clock + quarters, one-tap stats, manual score adjustments, shot locations,
+ * on-court lineup tracking, play-by-play filters, exact undo, live box score
+ * and finalization. Every tap is persisted immediately through TBS.app.commit,
+ * and keyboard shortcuts are routed via the small API at the bottom of this
+ * module (see js/shortcuts.js for the key map).
  * ========================================================================= */
 (function (TBS) {
   'use strict';
 
   const ui = TBS.ui;
   const st = TBS.stats;
+  const an = TBS.analytics;
   const storage = TBS.storage;
   const qs = ui.qs;
 
   let selectedGameId = null;
   let selectedTeamId = null;
   let selectedPlayerId = null;
+  let pendingShot = null;
+  let pbpFilter = 'all';
+  let pbpLimit = '25';
   let timer = null;
 
   /* Play definitions: statDeltas are also used to undo a play exactly. */
@@ -35,23 +42,38 @@
   };
 
   const PLAY_BUTTONS = [
-    ['ft_make', 'FT', '+1 pt'],
-    ['fg2_make', '2PT', '+2 pts'],
-    ['fg3_make', '3PT', '+3 pts'],
-    ['ft_miss', 'FT miss', '0 pts'],
-    ['fg2_miss', '2PT miss', '0 pts'],
-    ['fg3_miss', '3PT miss', '0 pts'],
+    ['ft_make', 'FT', 'FT made'],
+    ['fg2_make', '2PT', '2PT made'],
+    ['fg3_make', '3PT', '3PT made'],
+    ['ft_miss', 'FT miss', 'attempt'],
+    ['fg2_miss', '2PT miss', 'attempt'],
+    ['fg3_miss', '3PT miss', 'attempt'],
     ['reb', 'REB', 'rebound'],
     ['ast', 'AST', 'assist'],
     ['stl', 'STL', 'steal'],
     ['blk', 'BLK', 'block'],
     ['tov', 'TOV', 'turnover'],
     ['pf', 'PF', 'foul'],
-    ['min', 'MIN', 'minute played']
+    ['min', 'MIN', 'minute']
   ];
 
+  const SHOT_PLAYS = { ft_make: false, ft_miss: false, fg2_make: true, fg2_miss: true, fg3_make: true, fg3_miss: true };
+
+  const PBP_FILTERS = [
+    { value: 'all', label: 'All plays' },
+    { value: 'scoring', label: 'Scoring plays' },
+    { value: 'misses', label: 'Missed shots' },
+    { value: 'other', label: 'Rebounds, fouls & other' },
+    { value: 'home', label: 'Home team only' },
+    { value: 'away', label: 'Away team only' }
+  ];
+
+  function teamOf(state, id) {
+    return state.teams.find(x => x.id === id) || null;
+  }
+
   function teamName(state, id) {
-    const t = state.teams.find(x => x.id === id);
+    const t = teamOf(state, id);
     return t ? t.name : 'Unknown team';
   }
 
@@ -60,7 +82,7 @@
     if (!game) {
       game = state.games.find(g => g.status === 'live') ||
         state.games.find(g => g.status === 'scheduled') ||
-        state.games.slice().reverse().find(g => g.status === 'final') || null;
+        st.sortByDateDesc(state.games.filter(g => g.status === 'final'))[0] || null;
       selectedGameId = game ? game.id : null;
     }
     if (game && (!selectedTeamId || (game.homeTeamId !== selectedTeamId && game.awayTeamId !== selectedTeamId))) {
@@ -68,6 +90,10 @@
       selectedPlayerId = null;
     }
     return game;
+  }
+
+  function sideOf(game, teamId) {
+    return teamId === game.homeTeamId ? 'home' : (teamId === game.awayTeamId ? 'away' : null);
   }
 
   function remainingSeconds(game, now) {
@@ -113,7 +139,7 @@
     });
   }
 
-  function nextQuarter(gameId, leagueQuarters) {
+  function nextQuarter(gameId) {
     TBS.app.commit(d => {
       const g = d.games.find(x => x.id === gameId);
       if (!g) return;
@@ -158,13 +184,14 @@
     TBS.app.commit(d => {
       const g = d.games.find(x => x.id === gameId);
       if (!g) return;
-      const key = teamId === g.homeTeamId ? 'homeScore' : (teamId === g.awayTeamId ? 'awayScore' : null);
+      const key = sideOf(g, teamId);
       if (!key) return;
-      g[key] = Math.max(0, (Number(g[key]) || 0) + delta);
+      g[key + 'Score'] = Math.max(0, (Number(g[key + 'Score']) || 0) + delta);
       g.events.push({
         id: storage.uid('event'), type: 'manual',
         label: (delta > 0 ? '+' : '') + delta + ' ' + teamName(d, teamId) + ' (manual)',
         teamId: teamId, playerId: '', statDeltas: {}, scoreDelta: delta,
+        shot: null,
         quarter: g.quarter, clockSeconds: Math.ceil(remainingSeconds(g)),
         ts: Date.now()
       });
@@ -175,9 +202,10 @@
     const def = PLAYS[playKey];
     if (!def) return;
     if (def.needsPlayer && !playerId) {
-      ui.toast('Select a player first (tap a name in the roster strip).', 'error');
+      ui.toast('Select a player first — tap a name in the roster strip, or use ↑ / ↓.', 'error');
       return;
     }
+    const shot = SHOT_PLAYS[playKey] && pendingShot ? Object.assign({}, pendingShot) : null;
     TBS.app.commit(d => {
       const g = d.games.find(x => x.id === gameId);
       if (!g) return;
@@ -191,8 +219,8 @@
         line[k] = Math.max(0, (Number(line[k]) || 0) + def.stats[k]);
       });
       if (def.score) {
-        const key = teamId === g.homeTeamId ? 'homeScore' : (teamId === g.awayTeamId ? 'awayScore' : null);
-        if (key) g[key] = Math.max(0, (Number(g[key]) || 0) + def.score);
+        const key = sideOf(g, teamId);
+        if (key) g[key + 'Score'] = Math.max(0, (Number(g[key + 'Score']) || 0) + def.score);
       }
       const player = d.players.find(p => p.id === playerId);
       g.events.push({
@@ -201,6 +229,43 @@
         teamId: teamId, playerId: playerId,
         statDeltas: Object.assign({}, def.stats),
         scoreDelta: def.score || 0,
+        shot: shot,
+        quarter: g.quarter, clockSeconds: Math.ceil(remainingSeconds(g)),
+        ts: Date.now()
+      });
+    });
+    if (shot) {
+      pendingShot = null;
+      ui.toast('Shot location logged with the play.', 'info');
+    }
+  }
+
+  /* Substitute a player in or out; the lineup is stored on the game and the
+   * event powers lineup-based minutes and the +/− calculation. */
+  function toggleOnCourt(gameId, playerId) {
+    const state = TBS.app.getState();
+    const game = state.games.find(g => g.id === gameId);
+    const player = state.players.find(p => p.id === playerId);
+    if (!game || !player) return;
+    const side = sideOf(game, player.teamId);
+    if (!side) { ui.toast('That player’s team is not in this game.', 'error'); return; }
+    const list = (game.lineup && game.lineup[side]) || [];
+    const onCourt = list.indexOf(playerId) >= 0;
+    if (!onCourt && list.length >= 5 &&
+      !ui.confirmDanger('You already have five players on court. Add a sixth anyway?')) return;
+    TBS.app.commit(d => {
+      const g = d.games.find(x => x.id === gameId);
+      if (!g) return;
+      g.lineup = g.lineup || { home: [], away: [] };
+      const ids = g.lineup[side] || [];
+      if (onCourt) g.lineup[side] = ids.filter(id => id !== playerId);
+      else if (ids.indexOf(playerId) < 0) g.lineup[side] = ids.concat(playerId);
+      g.events.push({
+        id: storage.uid('event'),
+        type: onCourt ? 'sub_out' : 'sub_in',
+        label: (onCourt ? 'Sub out — ' : 'Sub in — ') + player.name,
+        teamId: player.teamId, playerId: playerId,
+        statDeltas: {}, scoreDelta: 0, shot: null,
         quarter: g.quarter, clockSeconds: Math.ceil(remainingSeconds(g)),
         ts: Date.now()
       });
@@ -216,17 +281,26 @@
       const g = d.games.find(x => x.id === gameId);
       if (!g || !g.events.length) return;
       const e = g.events.pop();
-      if (e.playerId) {
+      if (e.playerId && e.statDeltas) {
         const line = g.stats.find(s => s.playerId === e.playerId);
         if (line) {
-          Object.keys(e.statDeltas || {}).forEach(k => {
+          Object.keys(e.statDeltas).forEach(k => {
             line[k] = Math.max(0, (Number(line[k]) || 0) - Number(e.statDeltas[k] || 0));
           });
         }
       }
       if (e.scoreDelta) {
-        const key = e.teamId === g.homeTeamId ? 'homeScore' : (e.teamId === g.awayTeamId ? 'awayScore' : null);
-        if (key) g[key] = Math.max(0, (Number(g[key]) || 0) - Number(e.scoreDelta));
+        const key = sideOf(g, e.teamId);
+        if (key) g[key + 'Score'] = Math.max(0, (Number(g[key + 'Score']) || 0) - Number(e.scoreDelta));
+      }
+      if (e.type === 'sub_in' || e.type === 'sub_out') {
+        const side = sideOf(g, e.teamId);
+        if (side) {
+          g.lineup = g.lineup || { home: [], away: [] };
+          const ids = g.lineup[side] || [];
+          if (e.type === 'sub_in') g.lineup[side] = ids.filter(id => id !== e.playerId);
+          else if (ids.indexOf(e.playerId) < 0) g.lineup[side] = ids.concat(e.playerId);
+        }
       }
     });
     ui.toast('Undid: ' + last.label, 'success');
@@ -237,7 +311,8 @@
     const cols = ['PTS', 'REB', 'AST', 'STL', 'BLK', 'FG', '3PT', 'FT', 'TOV'];
     function row(r) {
       const s = r.stats;
-      return '<tr><td>' + ui.esc(r.player.number) + ' ' + ui.esc(r.player.name) + '</td>' +
+      const team = teamOf(state, r.player.teamId);
+      return '<tr><td>' + ui.playerCell(r.player, { team: team, size: 'sm' }) + '</td>' +
         '<td class="align-right">' + s.pts + '</td><td class="align-right">' + s.reb + '</td>' +
         '<td class="align-right">' + s.ast + '</td><td class="align-right">' + s.stl + '</td>' +
         '<td class="align-right">' + s.blk + '</td><td class="align-right">' + s.fgm + '/' + s.fga + '</td>' +
@@ -264,11 +339,64 @@
     return '<div class="live-box">' + side(box.home) + side(box.away) + '</div>';
   }
 
+  /* Filter + trim the play-by-play log. */
+  function filteredEvents(game) {
+    const list = (game.events || []).slice().reverse();
+    const filtered = list.filter(e => {
+      if (pbpFilter === 'all') return true;
+      if (pbpFilter === 'scoring') return Number(e.scoreDelta) > 0;
+      if (pbpFilter === 'misses') return /_miss$/.test(String(e.type || ''));
+      if (pbpFilter === 'other') return !Number(e.scoreDelta) && !/_miss$/.test(String(e.type || ''));
+      if (pbpFilter === 'home') return e.teamId === game.homeTeamId;
+      if (pbpFilter === 'away') return e.teamId === game.awayTeamId;
+      return true;
+    });
+    return pbpLimit === 'all' ? filtered : filtered.slice(0, Number(pbpLimit) || 25);
+  }
+
+  function pbpHtml(game, state) {
+    const events = filteredEvents(game);
+    if (!events.length) {
+      return '<p class="muted">' + (game.events.length
+        ? 'No plays match this filter.'
+        : 'No plays recorded yet. Tap a stat button to start the log.') + '</p>';
+    }
+    return events.map(e => {
+      const player = e.playerId ? state.players.find(p => p.id === e.playerId) : null;
+      const team = teamOf(state, e.teamId);
+      const sub = e.type === 'sub_in' || e.type === 'sub_out';
+      return '<div class="play-item' + (sub ? ' play-sub' : '') + (Number(e.scoreDelta) > 0 ? ' play-score' : '') + '">' +
+        (player ? ui.avatar(player, { size: 'sm', team: team, showNumber: false }) : '') +
+        '<span class="play-label">' + ui.esc(e.label) + '</span>' +
+        '<span class="play-time">Q' + e.quarter + ' ' + ui.fmtClock(e.clockSeconds) +
+          (e.shot ? ' · 📍' : '') + '</span>' +
+        '</div>';
+    }).join('');
+  }
+
+  function drawShotSpot(game) {
+    const canvas = qs('#shot-spot');
+    if (!canvas || !TBS.shotchart) return;
+    const team = teamOf(TBS.app.getState(), selectedTeamId);
+    const shots = pendingShot ? [{ x: pendingShot.x, y: pendingShot.y, made: true }] : [];
+    TBS.shotchart.drawShots(canvas, shots, { color: (team && team.color) || '#d4a017' });
+    const label = qs('#shot-spot-label');
+    if (label) {
+      if (!pendingShot) label.textContent = 'None — tap the court to mark the next shot.';
+      else {
+        const zone = an.zoneOf(pendingShot, false);
+        const dist = an.shotDistanceFt(pendingShot);
+        label.textContent = zone + ' · ' + Math.round(dist) + ' ft from the rim (cleared after the next shot play).';
+      }
+    }
+    const clear = qs('#shot-clear');
+    if (clear) clear.disabled = !pendingShot;
+  }
+
   function render(state) {
     const select = qs('#live-game-select');
-    const sorted = state.games.slice().sort((a, b) =>
-      String(b.date + b.time).localeCompare(String(a.date + a.time))
-    );
+    if (!select) return;
+    const sorted = st.sortByDateDesc(state.games);
     select.innerHTML = ui.gameOptions(sorted, state.teams, selectedGameId,
       state.games.length ? '' : '— no games yet —');
     const game = activeGame(state);
@@ -287,17 +415,24 @@
     const canScore = game.status === 'live';
     const running = !!game.clockRunningSince;
     const left = remainingSeconds(game);
-    const homeName = teamName(state, game.homeTeamId);
-    const awayName = teamName(state, game.awayTeamId);
+    const homeTeam = teamOf(state, game.homeTeamId);
+    const awayTeam = teamOf(state, game.awayTeamId);
+    const homeName = homeTeam ? homeTeam.name : 'Unknown team';
+    const awayName = awayTeam ? awayTeam.name : 'Unknown team';
+    const side = sideOf(game, selectedTeamId) || 'home';
+    const lineup = (game.lineup && game.lineup[side]) || [];
     const roster = state.players
       .filter(p => p.teamId === selectedTeamId && p.active !== false)
       .sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999));
     if (selectedPlayerId && !roster.some(p => p.id === selectedPlayerId)) selectedPlayerId = null;
+    const lineupMinutes = an.minutesFromLineup(game, state.league);
 
-    const scoreCard = (teamId, name, score, side) =>
-      '<div class="score-team' + (teamId === selectedTeamId ? ' selected' : '') +
-        '" data-action="select-team" data-team="' + ui.esc(teamId) + '" role="button" tabindex="0">' +
-        '<div class="team-label">' + side + '</div><div class="team-name">' + ui.esc(name) + '</div>' +
+    const scoreCard = (team, teamId, score, label) =>
+      '<div class="score-team' + (teamId === selectedTeamId ? ' selected' : '') + '"' +
+        (team && team.color ? ' style="--team-color:' + ui.esc(team.color) + '"' : '') +
+        ' data-action="select-team" data-team="' + ui.esc(teamId) + '" role="button" tabindex="0">' +
+        '<div class="team-label">' + label + '</div>' +
+        '<div class="team-name">' + ui.esc(team ? team.name : 'Unknown team') + '</div>' +
         '<div class="score-value">' + ui.fmtInt(score) + '</div>' +
         '<div class="score-adjust">' +
           [1, 2, 3, -1].map(d =>
@@ -310,9 +445,25 @@
         '" data-action="play" data-play="' + key + '"' + (canScore ? '' : ' disabled') + '>' +
         ui.esc(label) + '<small>' + ui.esc(hint) + '</small></button>').join('');
 
-    const log = game.events.slice(-12).reverse().map(e =>
-      '<div class="play-item"><span>' + ui.esc(e.label) + '</span>' +
-      '<span class="play-time">Q' + e.quarter + ' ' + ui.fmtClock(e.clockSeconds) + '</span></div>').join('');
+    const chips = roster.length
+      ? roster.map(p =>
+          '<button type="button" class="roster-chip' + (p.id === selectedPlayerId ? ' selected' : '') +
+            (lineup.indexOf(p.id) >= 0 ? ' on-court' : '') + '" data-action="select-player" data-id="' +
+            ui.esc(p.id) + '" title="' + ui.esc(p.name) + (lineup.indexOf(p.id) >= 0 ? ' — on court' : '') + '">' +
+            ui.avatar(p, { size: 'sm', team: teamOf(state, p.teamId), showNumber: true }) +
+            '<span class="chip-text">#' + ui.esc(p.number) + ' ' + ui.esc(p.name) + '</span>' +
+            (lineup.indexOf(p.id) >= 0 ? '<span class="on-court-dot" aria-label="on court"></span>' : '') +
+          '</button>').join('')
+      : '<span class="muted">No active players on this team — add them in Teams &amp; Roster.</span>';
+
+    const lineupButtons = roster.length
+      ? roster.map(p =>
+          '<button type="button" class="lineup-toggle' + (lineup.indexOf(p.id) >= 0 ? ' is-on' : '') +
+            '" data-action="toggle-court" data-id="' + ui.esc(p.id) + '" aria-pressed="' +
+            (lineup.indexOf(p.id) >= 0 ? 'true' : 'false') + '">' +
+            '#' + ui.esc(p.number) + ' ' + ui.esc(p.name) +
+          '</button>').join('')
+      : '';
 
     host.innerHTML =
       '<div class="box-header">' +
@@ -320,18 +471,20 @@
           ' · ' + ui.fmtDate(game.date) + (game.time ? ' ' + ui.fmtTime(game.time) : '') +
           (game.location ? ' · ' + ui.esc(game.location) : '') +
           (game.notes ? ' · ' + ui.esc(game.notes) : '') + '</div>' +
-        '<div class="matchup"><span class="side">' + ui.esc(awayName) + '</span>' +
+        '<div class="matchup">' +
+          '<span class="side">' + ui.esc(awayName) + '</span>' +
           '<span class="final-score">' + ui.fmtInt(game.homeScore) + '–' + ui.fmtInt(game.awayScore) + '</span>' +
-          '<span class="side">' + ui.esc(homeName) + '</span></div>' +
+          '<span class="side">' + ui.esc(homeName) + '</span>' +
+        '</div>' +
         '<div class="box-meta">Home score shown first · ' +
           (game.status === 'final' ? 'Final — reopen to keep editing' :
             game.status === 'scheduled' ? 'Not started yet' : 'Live scoring in progress') + '</div>' +
       '</div>' +
 
       '<div class="scoreboard">' +
-        scoreCard(game.homeTeamId, homeName, game.homeScore, 'HOME') +
+        scoreCard(homeTeam, game.homeTeamId, game.homeScore, 'HOME') +
         '<div class="clock-box">' +
-          '<div class="quarter" id="live-clock-quarter">Quarter ' + game.quarter + ' / ' + state.league.quarters + '</div>' +
+          '<div class="quarter">Quarter ' + game.quarter + ' / ' + state.league.quarters + '</div>' +
           '<div class="clock' + (running ? ' running' : '') + '" id="live-clock">' + ui.fmtClock(left) + '</div>' +
           '<div class="clock-actions">' +
             '<button type="button" class="btn btn-mini" data-action="toggle-clock"' + (canScore ? '' : ' disabled') + '>' +
@@ -340,35 +493,45 @@
             '<button type="button" class="btn btn-mini" data-action="reset-clock"' + (canScore ? '' : ' disabled') + '>Reset</button>' +
           '</div>' +
         '</div>' +
-        scoreCard(game.awayTeamId, awayName, game.awayScore, 'AWAY') +
+        scoreCard(awayTeam, game.awayTeamId, game.awayScore, 'AWAY') +
       '</div>' +
 
       '<div class="console-grid">' +
         '<div class="console-panel">' +
-          '<h3>Record a play</h3>' +
-          '<p class="panel-note">Scoring for: <strong>' + ui.esc(teamName(state, selectedTeamId)) + '</strong>' +
-            ' — click a team score above to switch sides.</p>' +
-          '<div class="roster-strip">' +
-            (roster.length ? roster.map(p =>
-              '<button type="button" class="roster-chip' + (p.id === selectedPlayerId ? ' selected' : '') +
-                '" data-action="select-player" data-id="' + ui.esc(p.id) + '">#' + ui.esc(p.number) + ' ' +
-                ui.esc(p.name) + '</button>').join('') :
-              '<span class="muted">No active players on this team — add them in Teams &amp; Roster.</span>') +
+          '<div class="console-head">' +
+            '<div><h3>Record a play</h3>' +
+              '<p class="panel-note">Scoring for <strong>' +
+                ui.esc(teamName(state, selectedTeamId)) + '</strong> — click the other score to switch sides.</p></div>' +
+            '<button type="button" class="btn btn-mini" data-action="show-shortcuts">' +
+              ui.icon('keyboard') + ' Shortcuts</button>' +
           '</div>' +
+          '<div class="roster-strip">' + chips + '</div>' +
+          (roster.length ?
+            '<details class="lineup-panel"><summary>On court (' + lineup.length + '/5) · ' +
+              (lineupMinutes.players ? 'lineup clock tracked' : 'optional lineup tracking') + '</summary>' +
+              '<div class="lineup-toggles">' + lineupButtons + '</div>' +
+              '<p class="footnote">Toggling a player records a substitution and starts/stops their ' +
+                'lineup minutes. Leave it alone to keep the classic stat-line minutes.</p></details>' : '') +
           '<div class="stat-grid">' + playButtons + '</div>' +
+          '<div class="shot-spot-wrap">' +
+            '<h4 class="shot-spot-title">Shot spot <span class="muted small">(optional — attaches to the next shot)</span></h4>' +
+            '<canvas id="shot-spot" class="chart-canvas shot-canvas" role="img" ' +
+              'aria-label="Tap the court to mark where the next shot was taken"></canvas>' +
+            '<div class="shot-spot-bar"><span id="shot-spot-label" class="small muted"></span>' +
+              '<button type="button" class="btn btn-mini" id="shot-clear" data-action="clear-shot">Clear spot</button></div>' +
+          '</div>' +
           '<div class="console-actions">' +
             '<button type="button" class="btn btn-ghost" data-action="undo"' +
-              (canScore && game.events.length ? '' : ' disabled') + '>↶ Undo last play</button>' +
+              (canScore && game.events.length ? '' : ' disabled') + '>' + ui.icon('undo') + ' Undo last play</button>' +
             (game.status === 'scheduled'
-              ? '<button type="button" class="btn btn-primary" data-action="start-game">Start game</button>'
-              : '') +
+              ? '<button type="button" class="btn btn-primary" data-action="start-game">Start game</button>' : '') +
             (game.status === 'live'
-              ? '<button type="button" class="btn btn-primary" data-action="finalize">Finalize game</button>'
-              : '') +
+              ? '<button type="button" class="btn btn-primary" data-action="finalize">Finalize game</button>' : '') +
             (game.status === 'final'
-              ? '<button type="button" class="btn btn-ghost" data-action="reopen">Reopen for edits</button>'
-              : '') +
+              ? '<button type="button" class="btn btn-ghost" data-action="reopen">Reopen for edits</button>' : '') +
             '<button type="button" class="btn btn-ghost" data-action="edit-box">Edit box score</button>' +
+            '<button type="button" class="btn btn-mini" data-action="show-shortcuts">' +
+              'Press ? for keys</button>' +
           '</div>' +
           '<p class="console-status">' +
             (canScore ? 'Every tap is saved instantly. ' + game.events.length + ' plays logged.' :
@@ -377,11 +540,24 @@
           '</p>' +
         '</div>' +
         '<div class="console-panel">' +
-          '<h3>Play-by-play</h3><p class="panel-note">Most recent first · undo reverses stats and score exactly.</p>' +
-          '<div class="play-log">' + (log || '<p class="muted">No plays recorded yet.</p>') + '</div>' +
+          '<h3>Play-by-play</h3>' +
+          '<p class="panel-note">Most recent first · undo reverses stats, score and substitutions exactly.</p>' +
+          '<div class="pbp-filters">' +
+            '<label class="field field-inline"><span>Show</span>' +
+              '<select id="pbp-filter" aria-label="Filter play-by-play">' +
+                ui.options(PBP_FILTERS, pbpFilter) + '</select></label>' +
+            '<label class="field field-inline"><span>Limit</span>' +
+              '<select id="pbp-limit" aria-label="Number of plays to show">' +
+                ui.options([{ value: '12', label: '12 plays' }, { value: '25', label: '25 plays' },
+                  { value: '50', label: '50 plays' }, { value: 'all', label: 'All plays' }], pbpLimit) +
+              '</select></label>' +
+          '</div>' +
+          '<div class="play-log">' + pbpHtml(game, state) + '</div>' +
         '</div>' +
       '</div>' +
       compactBox(game, state);
+
+    drawShotSpot(game);
   }
 
   function newGameModal(state) {
@@ -421,7 +597,7 @@
           } else {
             newTeam = {
               id: storage.uid('team'), name: name,
-              short: name.slice(0, 3).toUpperCase(), primary: false
+              short: name.slice(0, 3).toUpperCase(), color: '', primary: false
             };
             awayTeamId = newTeam.id;
           }
@@ -431,10 +607,13 @@
           if (newTeam && !d.teams.some(t => t.id === newTeam.id)) d.teams.push(newTeam);
           d.games.push({
             id: id, date: values.date, time: values.time,
-            location: values.location.trim(), status: 'scheduled',
+            location: String(values.location || '').trim(),
+            season: d.league.season,
+            status: 'scheduled',
             homeTeamId: values.homeTeamId, awayTeamId: awayTeamId,
             homeScore: 0, awayScore: 0, quarter: 1,
             clockSeconds: d.league.quarterMinutes * 60, clockRunningSince: null,
+            lineup: storage.blankLineup(),
             stats: [], events: [], notes: '', createdAt: new Date().toISOString()
           });
         });
@@ -449,9 +628,25 @@
     selectedGameId = id;
     selectedTeamId = null;
     selectedPlayerId = null;
+    pendingShot = null;
     const select = qs('#live-game-select');
     if (select && Array.from(select.options).some(o => o.value === id)) select.value = id;
     if (TBS.app.activeTab && TBS.app.activeTab() === 'live') render(TBS.app.getState());
+  }
+
+  function selectPlayer(delta) {
+    const state = TBS.app.getState();
+    const game = activeGame(state);
+    if (!game) return;
+    const roster = state.players
+      .filter(p => p.teamId === selectedTeamId && p.active !== false)
+      .sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999));
+    if (!roster.length) { ui.toast('No active players on this team.', 'error'); return; }
+    let index = roster.findIndex(p => p.id === selectedPlayerId);
+    if (index < 0) index = delta > 0 ? -1 : 0;
+    index = (index + delta + roster.length) % roster.length;
+    selectedPlayerId = roster[index].id;
+    render(state);
   }
 
   function init() {
@@ -460,7 +655,14 @@
       render(TBS.app.getState());
     });
     qs('#live-add-game').addEventListener('click', () => newGameModal(TBS.app.getState()));
-    qs('#live-console').addEventListener('click', e => {
+
+    const host = qs('#live-console');
+    host.addEventListener('change', e => {
+      if (e.target.id === 'pbp-filter') { pbpFilter = e.target.value; render(TBS.app.getState()); }
+      else if (e.target.id === 'pbp-limit') { pbpLimit = e.target.value; render(TBS.app.getState()); }
+    });
+
+    host.addEventListener('click', e => {
       const btn = e.target.closest('[data-action]');
       if (!btn) return;
       const state = TBS.app.getState();
@@ -476,12 +678,18 @@
           if (btn.dataset.team !== selectedTeamId) {
             selectedTeamId = btn.dataset.team;
             selectedPlayerId = null;
+            pendingShot = null;
             render(state);
           }
           break;
         case 'select-player':
-          selectedPlayerId = btn.dataset.id;
-          render(state);
+          if (btn.dataset.id !== selectedPlayerId) {
+            selectedPlayerId = btn.dataset.id;
+            render(state);
+          }
+          break;
+        case 'toggle-court':
+          toggleOnCourt(game.id, btn.dataset.id);
           break;
         case 'manual-score':
           if (game.status !== 'live') { ui.toast('Start or reopen the game first.', 'error'); return; }
@@ -492,7 +700,7 @@
           applyPlay(game.id, btn.dataset.play, selectedTeamId, selectedPlayerId);
           break;
         case 'toggle-clock': toggleClock(game.id); break;
-        case 'next-quarter': nextQuarter(game.id, state.league.quarters); break;
+        case 'next-quarter': nextQuarter(game.id); break;
         case 'reset-clock': resetClock(game.id); break;
         case 'undo': undoLast(game.id); break;
         case 'start-game':
@@ -509,9 +717,75 @@
           TBS.boxscores.openGame(game.id);
           TBS.app.go('boxscores');
           break;
+        case 'clear-shot':
+          pendingShot = null;
+          drawShotSpot(game);
+          break;
+      }
+    });
+
+    /* Shot spot: tap/drag on the mini court to set the next shot location. */
+    host.addEventListener('pointerdown', e => {
+      const canvas = e.target.closest && e.target.closest('#shot-spot');
+      if (!canvas) return;
+      const game = activeGame(TBS.app.getState());
+      if (!game) return;
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const x = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+      const y = Math.min(1, Math.max(0, 1 - (e.clientY - rect.top) / rect.height));
+      pendingShot = { x: Math.round(x * 1000) / 1000, y: Math.round(y * 1000) / 1000 };
+      drawShotSpot(game);
+    });
+
+    /* Score cards are also keyboard activatable. */
+    host.addEventListener('keydown', e => {
+      const card = e.target.closest && e.target.closest('[data-action="select-team"]');
+      if (card && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        card.click();
       }
     });
   }
 
-  TBS.live = { render: render, init: init, openGame: openGame };
+  /* ---------------------- shortcuts API (see shortcuts.js) ---------------- */
+
+  function shortcutGame() {
+    return activeGame(TBS.app.getState());
+  }
+
+  TBS.live = {
+    render: render,
+    init: init,
+    openGame: openGame,
+    hasGame: function () { return !!shortcutGame(); },
+    shortcutPlay: function (playKey) {
+      const state = TBS.app.getState();
+      const game = shortcutGame();
+      if (!game) return;
+      if (game.status !== 'live') { ui.toast('Start or reopen the game first.', 'error'); return; }
+      applyPlay(game.id, playKey, selectedTeamId, selectedPlayerId);
+      render(state);
+    },
+    shortcutUndo: function () {
+      const game = shortcutGame();
+      if (game) undoLast(game.id);
+    },
+    shortcutClock: function () {
+      const game = shortcutGame();
+      if (!game) return;
+      if (game.status !== 'live') { ui.toast('Start the game first.', 'error'); return; }
+      toggleClock(game.id);
+    },
+    shortcutNextQuarter: function () {
+      const game = shortcutGame();
+      if (!game) return;
+      if (game.status !== 'live') { ui.toast('Start the game first.', 'error'); return; }
+      nextQuarter(game.id);
+    },
+    cyclePlayer: selectPlayer,
+    selected: function () {
+      return { gameId: selectedGameId, teamId: selectedTeamId, playerId: selectedPlayerId };
+    }
+  };
 })(window.TBS = window.TBS || {});

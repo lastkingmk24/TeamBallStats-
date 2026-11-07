@@ -1,7 +1,7 @@
 /* =========================================================================
  * schedule.js — fixtures (games) + calendar events (practice / other).
- * Games created here are fully-fledged game records with status 'scheduled'
- * and can be started in the Live Console or edited as a final box score.
+ * Games created here are full game records with status 'scheduled' and can
+ * be started in the Live Console or edited as a final box score.
  * ========================================================================= */
 (function (TBS) {
   'use strict';
@@ -10,9 +10,19 @@
   const storage = TBS.storage;
   const qs = ui.qs;
 
+  function teamOf(state, id) {
+    return state.teams.find(x => x.id === id) || null;
+  }
+
   function teamName(state, id) {
-    const t = state.teams.find(x => x.id === id);
+    const t = teamOf(state, id);
     return t ? t.name : 'Unknown team';
+  }
+
+  function teamDot(state, id) {
+    const team = teamOf(state, id);
+    return '<span class="team-dot" style="--team-color:' +
+      ui.esc(team && team.color ? team.color : '#94a3b8') + '"></span>';
   }
 
   function preserveSelect(selector, html, fallback) {
@@ -42,7 +52,7 @@
       : 'Practices and other events appear on the timeline but do not affect standings.';
   }
 
-  function gameActions(state, g) {
+  function gameActions(g) {
     const id = ui.esc(g.id);
     let html = '';
     if (g.status === 'scheduled') {
@@ -72,9 +82,11 @@
     preserveSelect('#sched-away',
       ui.teamOptions(state.teams, '', state.teams.length > 1 ? '— choose opponent —' : ''),
       others.length ? others[0].id : '');
-    if (qs('#sched-away').value === qs('#sched-home').value && state.teams.length > 1) {
-      const alternative = state.teams.find(t => t.id !== qs('#sched-home').value);
-      if (alternative) qs('#sched-away').value = alternative.id;
+    const awaySelect = qs('#sched-away');
+    const homeSelect = qs('#sched-home');
+    if (awaySelect.value === homeSelect.value && state.teams.length > 1) {
+      const alternative = state.teams.find(t => t.id !== homeSelect.value);
+      if (alternative) awaySelect.value = alternative.id;
     }
     if (!qs('#sched-date').value) qs('#sched-date').value = storage.todayISO();
     syncTypeFields();
@@ -82,16 +94,20 @@
     const items = [];
     state.games.forEach(g => items.push({
       kind: 'game', id: g.id, date: g.date, time: g.time, g: g,
-      title: teamName(state, g.awayTeamId) + ' @ ' + teamName(state, g.homeTeamId),
+      titleHtml: teamDot(state, g.awayTeamId) + ui.esc(teamName(state, g.awayTeamId)) + ' @ ' +
+        teamDot(state, g.homeTeamId) + ui.esc(teamName(state, g.homeTeamId)),
       meta: (g.time ? ui.fmtTime(g.time) + ' · ' : '') + (g.location || '') +
         (g.notes ? ' · ' + g.notes : ''),
-      badge: ui.statusBadge(g.status),
+      badge: ui.statusBadge(g.status) + (g.status === 'final'
+        ? ' <span class="timeline-score">' + ui.fmtInt(g.homeScore) + '–' + ui.fmtInt(g.awayScore) + '</span>'
+        : ''),
       status: g.status,
-      actions: gameActions(state, g)
+      actions: gameActions(g)
     }));
     state.schedule.forEach(ev => items.push({
       kind: 'event', id: ev.id, date: ev.date, time: ev.time, ev: ev,
-      title: ev.title,
+      titleHtml: '<span class="event-glyph" aria-hidden="true">' +
+        (ev.type === 'practice' ? '🎯' : '📅') + '</span>' + ui.esc(ev.title),
       meta: (ui.fmtTime(ev.date.indexOf('T') >= 0 ? ev.date.slice(11, 16) : ev.time) ?
         ui.fmtTime(ev.date.indexOf('T') >= 0 ? ev.date.slice(11, 16) : ev.time) + ' · ' : '') +
         (ev.location || '') + (ev.notes ? ' · ' + ev.notes : ''),
@@ -115,9 +131,9 @@
         '<div class="timeline">' + list.map(i =>
           '<div class="timeline-item' + (i.status === 'live' ? ' is-live' : '') + '">' +
             '<div class="timeline-date"><strong>' + ui.fmtDate(i.date) + '</strong>' +
-              (ui.relativeDate(i.date) ? ui.esc(ui.relativeDate(i.date)) :
-                (i.time ? ui.fmtTime(i.time) : '')) + '</div>' +
-            '<div class="timeline-body"><strong>' + ui.esc(i.title) + '</strong> ' + i.badge +
+              '<span>' + (ui.relativeDate(i.date) ? ui.esc(ui.relativeDate(i.date)) :
+                (i.time ? ui.fmtTime(i.time) : '')) + '</span></div>' +
+            '<div class="timeline-body"><div class="timeline-title">' + i.titleHtml + '</div>' + i.badge +
               '<div class="meta">' + ui.esc(i.meta || 'No location or notes') + '</div></div>' +
             '<div class="timeline-actions">' + i.actions + '</div>' +
           '</div>').join('') + '</div>';
@@ -158,8 +174,8 @@
           game.homeTeamId = values.homeTeamId;
           game.awayTeamId = values.awayTeamId;
           game.status = values.status;
-          game.location = values.location.trim();
-          game.notes = values.notes.trim();
+          game.location = String(values.location || '').trim();
+          game.notes = String(values.notes || '').trim();
           if (game.status !== 'live') game.clockRunningSince = null;
         });
         close();
@@ -189,12 +205,12 @@
         TBS.app.commit(d => {
           const item = d.schedule.find(x => x.id === id);
           if (!item) return;
-          item.title = values.title.trim();
+          item.title = String(values.title || '').trim() || 'Event';
           item.type = values.type;
           item.date = values.date + (values.time ? 'T' + values.time : '');
           item.time = values.time;
-          item.location = values.location.trim();
-          item.notes = values.notes.trim();
+          item.location = String(values.location || '').trim();
+          item.notes = String(values.notes || '').trim();
         });
         close();
         ui.toast('Event updated.', 'success');
@@ -229,11 +245,13 @@
       if (newTeam && !d.teams.some(t => t.id === newTeam.id)) d.teams.push(newTeam);
       d.games.push({
         id: newId, date: vals.date, time: vals.time, location: vals.location,
+        season: d.league.season,
         status: 'scheduled',
         homeTeamId: vals.homeTeamId, awayTeamId: vals.awayTeamId,
         homeScore: 0, awayScore: 0,
         quarter: 1, clockSeconds: d.league.quarterMinutes * 60,
         clockRunningSince: null,
+        lineup: storage.blankLineup(),
         stats: [], events: [], notes: vals.notes,
         createdAt: new Date().toISOString()
       });
@@ -263,7 +281,7 @@
         } else {
           newTeam = {
             id: storage.uid('team'), name: name,
-            short: name.slice(0, 3).toUpperCase(), primary: false
+            short: name.slice(0, 3).toUpperCase(), color: '', primary: false
           };
           awayTeamId = newTeam.id;
         }
@@ -293,7 +311,7 @@
         };
         if (!vals.homeTeamId || !vals.awayTeamId || vals.homeTeamId === vals.awayTeamId) {
           askForOpponent(vals, TBS.app.getState());
-          return; // modal will finish the job and reset the form
+          return; /* the modal finishes the job and resets the form */
         }
         addFixture(vals, null);
       } else {
