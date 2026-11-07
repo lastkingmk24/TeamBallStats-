@@ -54,7 +54,13 @@
 
   function gameActions(g) {
     const id = ui.esc(g.id);
+    const a = TBS.auth;
+    const mine = !a || a.canScoreGame(g);
+    const admin = !a || a.canDeleteGame();
     let html = '';
+    if (!mine) {
+      return '<button type="button" class="btn btn-mini" data-action="open-box" data-id="' + id + '">Box score</button>';
+    }
     if (g.status === 'scheduled') {
       html += '<button type="button" class="btn btn-mini" data-action="start-game" data-id="' + id + '">Start live</button>';
     } else if (g.status === 'live') {
@@ -65,7 +71,9 @@
       html += '<button type="button" class="btn btn-mini" data-action="print-game" data-id="' + id + '">Print</button>';
     }
     html += '<button type="button" class="btn btn-mini" data-action="edit-game" data-id="' + id + '">Edit</button>';
-    html += '<button type="button" class="btn btn-mini" data-action="delete-game" data-id="' + id + '">Delete</button>';
+    if (admin) {
+      html += '<button type="button" class="btn btn-mini" data-action="delete-game" data-id="' + id + '">Delete</button>';
+    }
     return html;
   }
 
@@ -75,8 +83,32 @@
       '<button type="button" class="btn btn-mini" data-action="delete-event" data-id="' + id + '">Delete</button>';
   }
 
+  /* The club a fixture form defaults to: the signed-in team, else the league's. */
+  function myClubId(state) {
+    const a = TBS.auth;
+    if (a && a.role() === 'team') return a.myTeamId();
+    return state.league.primaryTeamId;
+  }
+
+  function applyFormScope(state) {
+    const a = TBS.auth;
+    const homeSelect = qs('#sched-home');
+    const hint = qs('#sched-hint');
+    if (!homeSelect) return;
+    if (a && a.role() === 'team') {
+      const team = state.teams.find(t => t.id === a.myTeamId());
+      if (team) homeSelect.value = team.id;
+      homeSelect.disabled = true;
+      if (hint) hint.textContent = 'Your fixtures are added with ' + team.name +
+        ' as the home team. League management can rebalance home/away.';
+    } else {
+      homeSelect.disabled = false;
+      syncTypeFields();
+    }
+  }
+
   function render(state) {
-    const primaryId = state.league.primaryTeamId;
+    const primaryId = myClubId(state);
     const others = state.teams.filter(t => t.id !== primaryId);
     preserveSelect('#sched-home', ui.teamOptions(state.teams, ''), primaryId);
     preserveSelect('#sched-away',
@@ -90,6 +122,7 @@
     }
     if (!qs('#sched-date').value) qs('#sched-date').value = storage.todayISO();
     syncTypeFields();
+    applyFormScope(state);
 
     const items = [];
     state.games.forEach(g => items.push({
@@ -305,9 +338,15 @@
       if (!date) return;
 
       if (type === 'game') {
+        const a = TBS.auth;
+        const homeField = qs('#sched-home');
+        if (a && a.role() === 'team') {
+          homeField.value = a.myTeamId();
+          homeField.disabled = false;
+        }
         const vals = {
           date: date, time: time, location: location, notes: notes,
-          homeTeamId: qs('#sched-home').value, awayTeamId: qs('#sched-away').value
+          homeTeamId: homeField.value, awayTeamId: qs('#sched-away').value
         };
         if (!vals.homeTeamId || !vals.awayTeamId || vals.homeTeamId === vals.awayTeamId) {
           askForOpponent(vals, TBS.app.getState());
@@ -343,6 +382,10 @@
         case 'edit-game': editGame(state, id); break;
         case 'edit-event': editEvent(state, id); break;
         case 'delete-game':
+          if (TBS.auth && !TBS.auth.canDeleteGame()) {
+            ui.toast('Only league management can delete a game.', 'error');
+            break;
+          }
           if (ui.confirmDanger('Delete this game and its box score? This cannot be undone.')) {
             TBS.app.commit(d => { d.games = d.games.filter(g => g.id !== id); });
             ui.toast('Game deleted.', 'success');

@@ -573,6 +573,135 @@ check('shotZones classifies makes, misses and court zones', () => {
   assert.strictEqual(TBS.analytics.zoneOf({ x: 0.5, y: 0.9 }, true), 'Top 3');
 });
 
+/* ---------------------------- access & roles ---------------------------- */
+
+/* auth.js only needs window + localStorage + sessionStorage to decide who may
+ * do what; the gate painting is browser-only and is covered by the jsdom
+ * harness. Here we check hashing, roles and permissions. */
+function authContext(seed) {
+  const mem = memoryStore(seed);
+  const sessionStore = {};
+  const sandbox = { console: console, localStorage: mem.localStorage };
+  sandbox.sessionStorage = {
+    getItem: k => (Object.prototype.hasOwnProperty.call(sessionStore, k) ? sessionStore[k] : null),
+    setItem: (k, v) => { sessionStore[k] = String(v); },
+    removeItem: k => { delete sessionStore[k]; }
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  vm.createContext(sandbox);
+  ['js/storage.js', 'js/stats.js', 'js/auth.js'].forEach(file => {
+    vm.runInContext(fs.readFileSync(path.join(ROOT, file), 'utf8'), sandbox, { filename: file });
+  });
+  return { TBS: sandbox.TBS, store: mem.store, sessionStore: sessionStore };
+}
+
+check('auth: demo passcodes sign in a team and the league, and reject a wrong one', () => {
+  const ctx = authContext();
+  const auth = ctx.TBS.auth;
+  const state = ctx.TBS.storage.defaultData();
+  const teamId = state.league.primaryTeamId;
+
+  const teamTry = auth.signIn(state, { role: 'team', teamId: teamId, passcode: 'team', remember: false });
+  assert.strictEqual(teamTry.ok, true);
+  assert.strictEqual(auth.role(), 'team');
+  assert.strictEqual(auth.myTeamId(), teamId);
+  assert.strictEqual(auth.canManageLeague(), false);
+  assert.strictEqual(auth.canManageTeam(teamId), true);
+  assert.strictEqual(auth.canManageTeam('team-other'), false);
+  assert.strictEqual(auth.canScoreGame({ homeTeamId: teamId, awayTeamId: 'x' }), true);
+  assert.strictEqual(auth.canScoreGame({ homeTeamId: 'a', awayTeamId: 'b' }), false);
+  assert.strictEqual(auth.canDeleteGame(), false);
+  assert.strictEqual(auth.canResetData(), false);
+
+  auth.signOut({ silent: true });
+  assert.strictEqual(auth.isSignedIn(), false);
+
+  const bad = auth.signIn(state, { role: 'team', teamId: teamId, passcode: 'nope' });
+  assert.strictEqual(bad.ok, false);
+  assert.ok(bad.error.length > 0);
+  assert.strictEqual(auth.isSignedIn(), false);
+
+  const admin = auth.signIn(state, { role: 'commissioner', passcode: 'league' });
+  assert.strictEqual(admin.ok, true);
+  assert.strictEqual(auth.isAdmin(), true);
+  assert.strictEqual(auth.canManageLeague(), true);
+  assert.strictEqual(auth.canDeleteGame(), true);
+  assert.strictEqual(auth.canResetData(), true);
+  assert.strictEqual(auth.focusTeamId(state), state.league.primaryTeamId);
+});
+
+check('auth: passcodes are stored as salted hashes and never in plain text', () => {
+  const ctx = authContext();
+  const auth = ctx.TBS.auth;
+  const state = ctx.TBS.storage.defaultData();
+  const teamId = state.league.primaryTeamId;
+
+  assert.strictEqual(auth.setPasscode(state, 'commissioner', '', 'run-the-league'), true);
+  assert.strictEqual(auth.setPasscode(state, 'team', teamId, 'go-hawks'), true);
+
+  const serialised = JSON.stringify(ctx.TBS.storage.coerce(state));
+  assert.strictEqual(serialised.indexOf('run-the-league'), -1);
+  assert.strictEqual(serialised.indexOf('go-hawks'), -1);
+  assert.strictEqual(auth.hash('go-hawks'), auth.hash('go-hawks'));
+  assert.notStrictEqual(auth.hash('go-hawks'), auth.hash('go-hawkS'));
+
+  assert.strictEqual(auth.verify(state, 'commissioner', '', 'league'), false);
+  assert.strictEqual(auth.verify(state, 'commissioner', '', 'run-the-league'), true);
+  assert.strictEqual(auth.verify(state, 'team', teamId, 'team'), false);
+  assert.strictEqual(auth.verify(state, 'team', teamId, 'go-hawks'), true);
+  assert.strictEqual(auth.hasCustomPasscode(state, 'team', teamId), true);
+  assert.strictEqual(auth.hasCustomPasscode(state, 'commissioner', ''), true);
+  assert.strictEqual(auth.verify(state, 'team', 'no-such-team', 'go-hawks'), false);
+});
+
+check('auth: the session key is separate from league data and survives a reload', () => {
+  const ctx = authContext();
+  const auth = ctx.TBS.auth;
+  const state = ctx.TBS.storage.defaultData();
+  auth.signIn(state, { role: 'commissioner', passcode: 'league', remember: true });
+
+  assert.strictEqual(auth.SESSION_KEY, 'bball_tm_session_v1');
+  assert.strictEqual(DB_KEY, 'bball_tm_v1');
+  assert.ok(ctx.store[auth.SESSION_KEY], 'session persisted under its own key');
+  assert.strictEqual(ctx.store[DB_KEY], undefined, 'signing in never writes league data');
+
+  /* A fresh module instance (a reload) restores the same session. */
+  const again = authContext({ [auth.SESSION_KEY]: ctx.store[auth.SESSION_KEY] });
+  const restored = again.TBS.auth.restore();
+  assert.strictEqual(restored.role, 'commissioner');
+  assert.strictEqual(again.TBS.auth.isAdmin(), true);
+
+  again.TBS.auth.signOut({ silent: true });
+  assert.strictEqual(again.sessionStore[auth.SESSION_KEY], undefined);
+  assert.strictEqual(again.store[auth.SESSION_KEY], undefined);
+  assert.strictEqual(again.TBS.auth.current(), null);
+});
+
+check('auth: a team session for a deleted club is rejected', () => {
+  const ctx = authContext();
+  const auth = ctx.TBS.auth;
+  const state = ctx.TBS.storage.defaultData();
+  const teamId = state.league.primaryTeamId;
+  const res = auth.signIn(state, { role: 'team', teamId: 'team-ghost', passcode: 'team' });
+  assert.strictEqual(res.ok, false);
+  assert.ok(/no longer exists/i.test(res.error));
+  assert.strictEqual(auth.isSignedIn(), false);
+
+  /* Signed in, then the club disappears from the league. */
+  auth.signIn(state, { role: 'team', teamId: teamId, passcode: 'team', remember: false });
+  assert.strictEqual(auth.canManageTeam(teamId), true);
+  const shrunk = ctx.TBS.storage.coerce({
+    version: 3,
+    teams: [{ id: 'team-survivor', name: 'Survivors', primary: true }],
+    players: [], games: [], schedule: []
+  });
+  /* The session still names the deleted club: it grants nothing in the new one. */
+  assert.strictEqual(shrunk.teams.some(t => t.id === teamId), false);
+  assert.strictEqual(auth.canManageTeam(teamId), true, 'the session still names the old club');
+  assert.strictEqual(auth.canManageTeam('team-survivor'), false, 'and grants nothing in the new one');
+});
+
 /* ------------------------------ sample data ----------------------------- */
 
 check('sample-data.json is a valid v3 backup with photos, colours and events', () => {

@@ -78,7 +78,7 @@
   }
 
   function activeGame(state) {
-    let game = state.games.find(g => g.id === selectedGameId);
+    let game = scopedGames(state).find(g => g.id === selectedGameId);
     if (!game) {
       game = state.games.find(g => g.status === 'live') ||
         state.games.find(g => g.status === 'scheduled') ||
@@ -393,12 +393,21 @@
     if (clear) clear.disabled = !pendingShot;
   }
 
+  /* Team accounts only score their own games. */
+  function scopedGames(state) {
+    const a = TBS.auth;
+    if (!a || a.canManageLeague()) return state.games;
+    const myId = a.myTeamId();
+    return state.games.filter(g => g.homeTeamId === myId || g.awayTeamId === myId);
+  }
+
   function render(state) {
     const select = qs('#live-game-select');
     if (!select) return;
-    const sorted = st.sortByDateDesc(state.games);
+    const visible = scopedGames(state);
+    const sorted = st.sortByDateDesc(visible);
     select.innerHTML = ui.gameOptions(sorted, state.teams, selectedGameId,
-      state.games.length ? '' : '— no games yet —');
+      visible.length ? '' : '— no games yet —');
     const game = activeGame(state);
     if (selectedGameId) select.value = selectedGameId;
     ensureTimer(state);
@@ -561,8 +570,10 @@
   }
 
   function newGameModal(state) {
-    const primaryId = state.league.primaryTeamId;
+    const scoped = !!(TBS.auth && TBS.auth.role() === 'team');
+    const primaryId = scoped ? TBS.auth.myTeamId() : state.league.primaryTeamId;
     const others = state.teams.filter(t => t.id !== primaryId);
+    const homeTeams = scoped ? state.teams.filter(t => t.id === primaryId) : state.teams;
     const awayOptions = state.teams.map(t => ({ value: t.id, label: t.name }));
     if (!others.length) awayOptions.unshift({ value: '', label: '— create a new opponent below —' });
     ui.openModal({
@@ -571,7 +582,8 @@
         { name: 'date', label: 'Date', type: 'date', value: storage.todayISO(), required: true },
         { name: 'time', label: 'Time', type: 'time', value: '' },
         { name: 'homeTeamId', label: 'Home team', type: 'select', value: primaryId,
-          options: state.teams.map(t => ({ value: t.id, label: t.name })) },
+          options: (homeTeams.length ? homeTeams : state.teams).map(t => ({ value: t.id, label: t.name })),
+          help: scoped ? 'Team accounts schedule their own home games.' : undefined },
         { name: 'awayTeamId', label: 'Away team', type: 'select', value: others.length ? others[0].id : '',
           options: awayOptions },
         { name: 'newOpponent', label: 'New opponent name', type: 'text', value: '',
@@ -625,6 +637,11 @@
   }
 
   function openGame(id) {
+    const state = TBS.app.getState();
+    if (state && TBS.auth && !TBS.auth.canScoreGame(state.games.find(g => g.id === id))) {
+      const mine = scopedGames(state)[0];
+      id = mine ? mine.id : null;
+    }
     selectedGameId = id;
     selectedTeamId = null;
     selectedPlayerId = null;

@@ -19,19 +19,20 @@ including the court graphics and charts, is pure CSS and `<canvas>`.
 ## Contents
 
 1. [Quick start](#quick-start)
-2. [The nine tabs](#the-nine-tabs)
-3. [Design system and themes](#design-system-and-themes)
-4. [Player photos](#player-photos)
-5. [Advanced analytics](#advanced-analytics)
-6. [Keyboard shortcuts](#keyboard-shortcuts)
-7. [File layout](#file-layout)
-8. [Data model (schema v3)](#data-model-schema-v3)
-9. [Migration contract (v1 → v2 → v3)](#migration-contract-v1--v2--v3)
-10. [Testing](#testing)
-11. [Deployment](#deployment)
-12. [Accessibility, privacy and offline use](#accessibility-privacy-and-offline-use)
-13. [Troubleshooting](#troubleshooting)
-14. [What changed in v3](#what-changed-in-v3)
+2. [Sign-in: team account or league management](#sign-in-team-account-or-league-management)
+3. [The nine tabs](#the-nine-tabs)
+4. [Design system and themes](#design-system-and-themes)
+5. [Player photos](#player-photos)
+6. [Advanced analytics](#advanced-analytics)
+7. [Keyboard shortcuts](#keyboard-shortcuts)
+8. [File layout](#file-layout)
+9. [Data model (schema v3)](#data-model-schema-v3)
+10. [Migration contract (v1 → v2 → v3)](#migration-contract-v1--v2--v3)
+11. [Testing](#testing)
+12. [Deployment](#deployment)
+13. [Accessibility, privacy and offline use](#accessibility-privacy-and-offline-use)
+14. [Troubleshooting](#troubleshooting)
+15. [What changed in v3](#what-changed-in-v3)
 
 ---
 
@@ -52,9 +53,51 @@ events** and shot coordinates, and one scheduled game — and 2 calendar items.
 Importing it exercises every chart, the shot chart, the +/− numbers, the recap
 and the printable reports.
 
-**First visit.** The league starts empty but functional: one team (yours), no
+**First visit.** You land on the sign-in gate. Sign in as **League**
+(passcode `league`) to set the league up, or as **Team** (passcode `team`) to
+run a single club. The league starts empty but functional: one team (yours), no
 players, no games. Add players in **Teams & Roster**, fixtures in **Schedule**,
-then score them in **Live Console**.
+then score them in **Live Console**. After importing `sample-data.json` you can
+sign in as the **Riverside Hawks** (`team`) or the league (`league`).
+
+---
+
+## Sign-in: team account or league management
+
+The app opens on a broadcast-style sign-in gate. Choose **Team** and pick a club,
+or choose **League** for the management organisation, then enter the passcode.
+
+| Account | Demo passcode | What it can do |
+| --- | --- | --- |
+| **Team** (any club) | `team` | Its own roster (add/edit/deactivate players, photos), its own fixtures, starting and scoring its own games, its box scores, and player stats. Every other club is read-only. |
+| **League management** | `league` | Everything a team can do for every club, plus adding/removing clubs, deleting games, league settings, JSON backup/restore, the reset switch and passcode management. |
+
+**Where the passcodes live.** `league.access` holds a salted hash
+(`h1$…`) for the management account and one per team; nothing readable is ever
+stored, exported in a backup or shown in the UI. Until a passcode is replaced,
+the demo value above is accepted. League management replaces them in
+**Data → Access & roles**, which also shows each club's status and a one-click
+“Reset to demo”.
+
+**Sessions.** Signing in writes one small object to
+`bball_tm_session_v1` (its own key — never inside the league document) in
+`localStorage` when *Keep me signed in* is checked, otherwise in
+`sessionStorage`, so closing the tab ends the session. An inline bootstrap in
+`index.html` hides the gate before first paint for a returning session, and
+**Account → Switch account** (or `Ctrl/⌘ + Shift + L`) locks the console without
+touching any league data. Sessions are shared across tabs: signing out in one
+tab locks the others.
+
+**It is a gate, not a server.** There is no backend, so this decides *which
+account you are working as on this device* and keeps a signed-in team from
+editing another club. Anyone with the browser's dev tools can read the local
+league file, exactly as with any offline-first app — the hash keeps passcodes
+out of plain sight, it is not cryptography.
+
+**Role-aware UI.** The signed-in club drives the header record, the Overview
+kicker and scope, the Live Console game list, the Schedule form (home team is
+locked to your club), the Box Scores delete button (management only), the Teams
+tab forms and the Data tab, which is hidden entirely from team accounts.
 
 ---
 
@@ -74,6 +117,12 @@ then score them in **Live Console**.
 
 Toasts confirm every action, and destructive actions ask for confirmation first.
 
+**Scope per role.** A **team account** sees Games (Overview), Live Console,
+Schedule, Box Scores, Standings, Teams, Players and Reports — the **Data** tab
+belongs to league management, and within Teams/Live/Schedule/Box Scores the
+writes are limited to that club. League management sees all nine tabs and every
+action.
+
 ---
 
 ## Design system and themes
@@ -91,6 +140,24 @@ custom properties in `css/style.css`:
   every interactive control;
 * responsive at 1080 px, 860 px (mobile nav) and 640 px, with horizontally
   scrollable tables on small screens.
+
+**Broadcast layout (the league-site look)**
+
+* Sign-in gate: dark court backdrop, a League Pass blue/gold accent, and a
+  two-card role picker (Team / League) that drives who you are signed in as.
+* Header: black chrome with a ball mark, the league wordmark, a flat
+  hover-underlined nav, a gold **League Pass** pill, the team record, a
+  scores grid button and the account button.
+* Cup band + ticker under the nav (`League Cup` / your league name), then a
+  **score strip**: horizontally scrolling result cards with club crests, a
+  winner emphasis, `FINAL` / `LIVE · Q3` / tip-off time and the "My team"
+  marker; clicking a card opens that box score.
+* Overview: a featured-game **hero** (blue banner, score line with club
+  crests, big uppercase headline, WATCH / BOX SCORE buttons, related content)
+  next to a **Headlines** rail that is generated from the league's own results,
+  standings and leaderboards — no network, no editorial database.
+* Round club crests are generated from the club's colour + abbreviation (an
+  optional uploaded crest, `teams[].logo`, is used when present).
 
 **Dark and light themes**
 
@@ -203,7 +270,8 @@ Load order is fixed in `index.html` (classic scripts, no modules, so `file://`
 works):
 
 ```
-index.html              markup for all nine tabs, dialogs, toast host, inline theme bootstrap
+index.html              markup for all nine tabs, sign-in gate, score strip, dialogs,
+                        toast host, inline theme + session bootstrap
 css/style.css           design tokens (light + dark), components, responsive rules, @media print
 
 js/storage.js           schema v3, normalizers, migration chain, saving, quota reporting
@@ -212,6 +280,8 @@ js/analytics.js         pure analytics: per-36, +/-, lineup minutes, streaks, fl
 js/ui.js                DOM helpers: escaping, formatting, icons, avatars, smart tables,
                         dialogs/modals, toasts, downloads, empty states
 js/theme.js             bball_tm_theme persistence, resolve/apply/toggle, cross-tab sync
+js/auth.js              sign-in gate: team vs league roles, hashed passcodes, session key,
+                        role permissions, account dialog, cross-tab lock
 js/photos.js            canvas photo compression, quota guard, upload binding
 js/shotchart.js         canvas drawing: shot chart, game flow, sparkline (DPR aware)
 js/shortcuts.js         live-console key bindings + help legend
@@ -225,6 +295,7 @@ js/leaders.js           Player Stats tab (filters, leaders, analytics, table, CS
 js/profiles.js          player profile dialog (averages, game log, splits, shot chart)
 js/reports.js           printable reports via window.print()
 js/export.js            Data tab: settings, JSON backup/restore, legacy backup, reset
+js/access.js            Data tab: Access & roles (passcodes per account)
 js/app.js               boot, tab routing, state/commit, header record, ticker, cross-tab sync
 
 sample-data.json        importable demo league (schema v3, includes photos + colours)
@@ -323,6 +394,8 @@ future version survives a load/save round-trip untouched.
 | `bball_tm_v1` | the whole league (schema v3) | unchanged key since v1 |
 | `bball_tm_v1_pre_v2_backup` | raw text of the original **v1** document | written once, never overwritten, never deleted by an upgrade; downloadable from **Data** |
 | `bball_tm_theme` | `dark` or `light` | **device** preference; never part of the league JSON; absent = follow the OS |
+| `bball_tm_session_v1` | `{v, role, teamId, name, signedInAt}` | sign-in session; `localStorage` when *Keep me signed in*, otherwise `sessionStorage`; never part of the league JSON |
+| `league.access` (inside the league) | `{admin: hash, teams: {teamId: hash}}` | salted passcode hashes only — no plaintext, nothing to leak in a backup |
 
 ---
 
@@ -396,7 +469,12 @@ things:
 * analytics: per-36, +/− attribution with substitutions, lineup minutes,
   streaks, game flow, shot zones;
 * `sample-data.json`: v3 shape, photo/colour validity, and the invariant that
-  the events of each finished game add up to its final score.
+  the events of each finished game add up to its final score;
+* **access & roles**: demo passcodes sign in a team and the league, wrong
+  passcodes are refused, permissions follow the role (`canManageTeam`,
+  `canScoreGame`, `canDeleteGame`, `canResetData`), passcodes are stored as
+  salted hashes that never appear in the serialised league, and the session
+  key is separate from league data and restored by a fresh module instance.
 
 The same files run unchanged in the browser — the pure modules
 (`storage.js`, `stats.js`, `analytics.js`, `theme.js`) never touch the DOM at
@@ -450,6 +528,16 @@ original file is downloadable from **Data → Download pre-upgrade v1 backup**.
 **Print is missing parts of the page.** Only the report sheet prints — build a
 report in **Reports**, then print.
 
+**“That passcode does not match…”** Until league management sets a custom one,
+the demo passcodes are `team` (any club) and `league` (management). If they were
+replaced and forgotten, clear the *site data* for the page and import your JSON
+backup — passcodes travel with the league, so use a backup made before the
+change, or reset a club's passcode from **Data → Access & roles**.
+
+**The sign-in gate keeps coming back.** *Keep me signed in* writes the session
+to `localStorage`; without it the session lives in `sessionStorage` and ends
+when the tab closes. A private window cannot persist either.
+
 ---
 
 ## What changed in v3
@@ -487,3 +575,27 @@ JSON imports, a one-time raw `bball_tm_v1_pre_v2_backup`, and a
 ---
 
 MIT licensed. See `LICENSE (MIT)`.
+
+---
+
+## What changed in v4 (broadcast UI + sign-in)
+
+v4 is a presentation and access layer on top of the same schema v3 document —
+no migration is needed and every existing install keeps working.
+
+* **Sign-in gate** (`js/auth.js`): Team or League account, hashed passcodes,
+  a device-scoped session in `bball_tm_session_v1`, cross-tab lock.
+* **Access & roles** (`js/access.js`): management-only passcode panel in the
+  Data tab; per-club status and reset-to-demo.
+* **Broadcast chrome**: black header with a League Pass pill, cup band, league
+  ticker, account button and a horizontally scrolling score strip with
+  generated club crests.
+* **Overview**: featured-game hero (banner, score line, headline, WATCH /
+  BOX SCORE, related content) beside a Headlines rail built from the league's
+  own results, standings and leaderboards.
+* **Role-aware views**: the Live Console lists only your games for a team
+  account, the Schedule form locks your club as home team, Box Scores hides
+  delete for non-management, the Teams tab is scoped to your roster and the
+  Data tab is hidden.
+* **Tests**: four new access/role checks (45 total); `js/auth.js` is pure
+  enough to run in the existing Node harness.
