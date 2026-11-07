@@ -550,6 +550,16 @@
     return normalizeV3(raw, { from: from, recordUpgrade: from < SCHEMA_VERSION });
   }
 
+  /* Account credentials never belong in a league backup. Old league.access
+   * passcode hashes are kept in existing local documents only long enough for
+   * a one-time account upgrade; exports and restored documents omit them. */
+  function withoutCredentials(raw) {
+    const out = clone(raw || {});
+    if (out.league && typeof out.league === 'object') delete out.league.access;
+    delete out.accounts;
+    return out;
+  }
+
   /* ---------- persistence -------------------------------------------------- */
 
   function rawStored() {
@@ -735,6 +745,7 @@
     migrateV1: migrateV1,
     detectVersion: detectVersion,
     coerce: coerce,
+    withoutCredentials: withoutCredentials,
     preservesEverything: preservesEverything,
     loadData: loadData,
     saveData: saveData,

@@ -38,7 +38,7 @@
   /* Merge by stable identity, remapping ids when a duplicate name exists.
    * Photos, team colours, seasons and lineups travel with the imported data. */
   function mergeData(current, incoming) {
-    const out = storage.clone(current);
+    const out = storage.withoutCredentials(current);
     const inc = storage.coerce(incoming);
 
     /* Teams: match on name, never import another "primary" flag. */
@@ -156,7 +156,7 @@
       migrationText(state) + ' ' +
       'Appearance: this device uses <strong>' + ui.esc(themeChoice || 'the OS preference') + '</strong>' +
       ' (league default: ' + ui.esc(state.league.theme || 'system') + '). ' +
-      'Export a JSON backup before resetting.';
+      'Export a JSON backup before resetting. Accounts on this device are kept separately.';
 
     const legacyBtn = qs('#export-legacy');
     legacyBtn.hidden = !storage.legacyBackup();
@@ -176,7 +176,7 @@
         if (!Array.isArray(parsed.players) && !Array.isArray(parsed.teams)) {
           throw new Error('Missing players/teams arrays');
         }
-        pending = parsed;
+        pending = storage.withoutCredentials(parsed);
         const sourceVersion = storage.detectVersion(parsed);
         qs('#import-summary').innerHTML = summaryHtml(storage.summarize(parsed),
           'Ready: ' + pendingName + ' (source schema v' + sourceVersion + ')');
@@ -226,7 +226,7 @@
 
     qs('#export-json').addEventListener('click', () => {
       const state = TBS.app.getState();
-      const payload = Object.assign({}, state, {
+      const payload = Object.assign({}, storage.withoutCredentials(state), {
         version: storage.SCHEMA_VERSION,
         app: 'TeamBallStats',
         schema: storage.DB_KEY,
@@ -266,7 +266,7 @@
 
     qs('#reset-data').addEventListener('click', () => {
       if (!ui.confirmDanger('Erase ALL data (teams, players, games, box scores, schedule and ' +
-        'settings)? Export a backup first. This cannot be undone.')) return;
+        'settings)? Accounts on this device are kept. Export a backup first. This cannot be undone.')) return;
       storage.resetData();
       TBS.app.replace(storage.defaultData());
       pending = null;

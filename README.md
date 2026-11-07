@@ -8,7 +8,8 @@ step, no `package.json`, no CDN, no network requests. Open `index.html` from
 Everything you enter — teams, players, jersey numbers, photos, games, box
 scores, play-by-play events, schedule items and settings — is stored in this
 browser's `localStorage` under the key **`bball_tm_v1`** and can be exported as a
-single JSON file at any time.
+single JSON file at any time. Username/password accounts are kept separately in
+**`bball_tm_accounts_v1`** and are never included in a league backup.
 
 TeamBallStats ships no images, fonts or icons at all — not even in this README —
 so there is nothing to download and nothing that can break offline. The UI,
@@ -53,51 +54,58 @@ events** and shot coordinates, and one scheduled game — and 2 calendar items.
 Importing it exercises every chart, the shot chart, the +/− numbers, the recap
 and the printable reports.
 
-**First visit.** You land on the sign-in gate. Sign in as **League**
-(passcode `league`) to set the league up, or as **Team** (passcode `team`) to
-run a single club. The league starts empty but functional: one team (yours), no
-players, no games. Add players in **Teams & Roster**, fixtures in **Schedule**,
-then score them in **Live Console**. After importing `sample-data.json` you can
-sign in as the **Riverside Hawks** (`team`) or the league (`league`).
+**First visit.** You land on the account gate. Choose **Create account**, then
+**Team** to make a username/password for one club, or **League** to make the
+league management account. The league starts empty but functional: one team,
+no players, no games. League management can add clubs in **Teams & Roster**;
+each club can then create its own account from the gate. Add players, fixtures
+and score games as before. Accounts are local to this browser and device.
 
 ---
 
 ## Sign-in: team account or league management
 
-The app opens on a broadcast-style sign-in gate. Choose **Team** and pick a club,
-or choose **League** for the management organisation, then enter the passcode.
+The gate has **Sign in** and **Create account** modes. Registration asks for a
+username, password and password confirmation. Team registration also asks which
+existing club the account belongs to. Usernames are unique on this device
+(case-insensitive), 3–32 characters, and may use letters, numbers, dots,
+underscores and hyphens. Passwords are 8–128 characters.
 
-| Account | Demo passcode | What it can do |
+| Account | How it is created | What it can do |
 | --- | --- | --- |
-| **Team** (any club) | `team` | Its own roster (add/edit/deactivate players, photos), its own fixtures, starting and scoring its own games, its box scores, and player stats. Every other club is read-only. |
-| **League management** | `league` | Everything a team can do for every club, plus adding/removing clubs, deleting games, league settings, JSON backup/restore, the reset switch and passcode management. |
+| **Team** | Create account → Team → choose an unclaimed club | Manage its own roster, fixtures and games. View every other club's statistics, standings, roster stats and box scores read-only. Its username and password are private to that account. |
+| **League management** | Create account → League | View league-wide statistics and manage league settings/data. It cannot see team usernames, view password hashes in the UI, or reset/change another account's password. |
 
-**Where the passcodes live.** `league.access` holds a salted hash
-(`h1$…`) for the management account and one per team; nothing readable is ever
-stored, exported in a backup or shown in the UI. Until a passcode is replaced,
-the demo value above is accepted. League management replaces them in
-**Data → Access & roles**, which also shows each club's status and a one-click
-“Reset to demo”.
+There is one account per club and one league management account on this device.
+League management can add more clubs in **Teams & Roster**; those clubs can then
+create their own accounts. Existing signed-in users change their own password
+from **Account → Change password**; the current password is required.
 
-**Sessions.** Signing in writes one small object to
-`bball_tm_session_v1` (its own key — never inside the league document) in
-`localStorage` when *Keep me signed in* is checked, otherwise in
-`sessionStorage`, so closing the tab ends the session. An inline bootstrap in
-`index.html` hides the gate before first paint for a returning session, and
-**Account → Switch account** (or `Ctrl/⌘ + Shift + L`) locks the console without
-touching any league data. Sessions are shared across tabs: signing out in one
-tab locks the others.
+**Where credentials live.** `bball_tm_accounts_v1` stores usernames and
+PBKDF2-SHA-256 password credentials (310,000 iterations, random 16-byte salt).
+Plaintext passwords are never stored. The account registry is separate from
+`bball_tm_v1`, so JSON league backups do not contain usernames or password
+credentials. Old `league.access` passcode hashes are accepted only once, as proof
+while creating a replacement account; after registration the old passcode cannot
+sign in. Shared demo passcodes no longer grant access.
 
-**It is a gate, not a server.** There is no backend, so this decides *which
-account you are working as on this device* and keeps a signed-in team from
-editing another club. Anyone with the browser's dev tools can read the local
-league file, exactly as with any offline-first app — the hash keeps passcodes
-out of plain sight, it is not cryptography.
+**Sessions.** Signing in writes a small v2 session object to
+`bball_tm_session_v1` in `localStorage` when *Keep me signed in* is checked,
+otherwise in `sessionStorage`. Changing a password invalidates older sessions
+for that account. **Account → Switch account** (or `Ctrl/⌘ + Shift + L`) locks
+the console without deleting accounts or league data. Sessions and account
+changes synchronise across tabs.
 
-**Role-aware UI.** The signed-in club drives the header record, the Overview
-kicker and scope, the Live Console game list, the Schedule form (home team is
-locked to your club), the Box Scores delete button (management only), the Teams
-tab forms and the Data tab, which is hidden entirely from team accounts.
+**It is a device-local gate, not a server.** There is no backend, cloud account
+or cross-device sync. Anyone with browser dev tools can edit local data, so this
+is not a production authentication boundary. The UI states this limitation.
+For real multi-device accounts you would need a backend identity provider and
+server-side authorization.
+
+**Role-aware UI.** Team accounts keep their existing write scope and can read
+other teams' stats. League management sees **Data → Access & roles**, now a
+league-wide statistics directory with shortcuts to each team's player stats and
+roster stats. It shows no team usernames and no password-reset controls.
 
 ---
 
@@ -113,15 +121,15 @@ tab forms and the Data tab, which is hidden entirely from team accounts.
 | **Teams & Roster** | Add teams (name, abbreviation, **custom colour**) and players (name, jersey number, position, team, **photo**). Edit/delete teams and players, deactivate players without deleting their history. Roster table is searchable and sortable. |
 | **Player Stats** | Season/team filters, summary cards (league leaders), leader cards (PPG/RPG/APG/eFG%/TS%/+−/per-36), an **analytics** panel (hot/cold streaks, pace, starter sets) and a searchable, sortable full stat table. **Export CSV** downloads the filtered table. |
 | **Reports** | Four printable reports built in the page, then `window.print()`: single-game box score, standings + rosters, player profile sheet (with photo, season averages, shooting splits, game log, shot chart) and a full-season report with every box score. Print always uses the **light** palette. |
-| **Data** | League settings (name, season, team name, quarters, minutes per quarter, default theme), full **JSON backup download**, restore (**merge** or **replace**), one-time **pre-upgrade v1 backup** download, storage usage summary, sample-data guidance and **Reset all data**. |
+| **Data** | League settings (name, season, team name, quarters, minutes per quarter, default theme), full **JSON backup download**, restore (**merge** or **replace**), one-time **pre-upgrade v1 backup** download, storage usage summary, sample-data guidance, **Access & roles** (league stats directory) and **Reset all data**. |
 
 Toasts confirm every action, and destructive actions ask for confirmation first.
 
 **Scope per role.** A **team account** sees Games (Overview), Live Console,
 Schedule, Box Scores, Standings, Teams, Players and Reports — the **Data** tab
 belongs to league management, and within Teams/Live/Schedule/Box Scores the
-writes are limited to that club. League management sees all nine tabs and every
-action.
+writes are limited to that club. League management sees all nine tabs and
+league-wide stats, but never another account's credentials.
 
 ---
 
@@ -143,8 +151,8 @@ custom properties in `css/style.css`:
 
 **Broadcast layout (the league-site look)**
 
-* Sign-in gate: dark court backdrop, a League Pass blue/gold accent, and a
-  two-card role picker (Team / League) that drives who you are signed in as.
+* Account gate: dark court backdrop, a League Pass blue/gold accent, Sign in /
+  Create account modes, and a Team / League role picker for registration.
 * Header: black chrome with a ball mark, the league wordmark, a flat
   hover-underlined nav, a gold **League Pass** pill, the team record, a
   scores grid button and the account button.
@@ -280,7 +288,7 @@ js/analytics.js         pure analytics: per-36, +/-, lineup minutes, streaks, fl
 js/ui.js                DOM helpers: escaping, formatting, icons, avatars, smart tables,
                         dialogs/modals, toasts, downloads, empty states
 js/theme.js             bball_tm_theme persistence, resolve/apply/toggle, cross-tab sync
-js/auth.js              sign-in gate: team vs league roles, hashed passcodes, session key,
+js/auth.js              username/password accounts, PBKDF2 credentials, sessions,
                         role permissions, account dialog, cross-tab lock
 js/photos.js            canvas photo compression, quota guard, upload binding
 js/shotchart.js         canvas drawing: shot chart, game flow, sparkline (DPR aware)
@@ -295,7 +303,7 @@ js/leaders.js           Player Stats tab (filters, leaders, analytics, table, CS
 js/profiles.js          player profile dialog (averages, game log, splits, shot chart)
 js/reports.js           printable reports via window.print()
 js/export.js            Data tab: settings, JSON backup/restore, legacy backup, reset
-js/access.js            Data tab: Access & roles (passcodes per account)
+js/access.js            Data tab: league-wide stats directory; no team credentials
 js/app.js               boot, tab routing, state/commit, header record, ticker, cross-tab sync
 
 sample-data.json        importable demo league (schema v3, includes photos + colours)
@@ -394,8 +402,9 @@ future version survives a load/save round-trip untouched.
 | `bball_tm_v1` | the whole league (schema v3) | unchanged key since v1 |
 | `bball_tm_v1_pre_v2_backup` | raw text of the original **v1** document | written once, never overwritten, never deleted by an upgrade; downloadable from **Data** |
 | `bball_tm_theme` | `dark` or `light` | **device** preference; never part of the league JSON; absent = follow the OS |
-| `bball_tm_session_v1` | `{v, role, teamId, name, signedInAt}` | sign-in session; `localStorage` when *Keep me signed in*, otherwise `sessionStorage`; never part of the league JSON |
-| `league.access` (inside the league) | `{admin: hash, teams: {teamId: hash}}` | salted passcode hashes only — no plaintext, nothing to leak in a backup |
+| `bball_tm_accounts_v1` | `{version: 1, accounts: [...]}` | usernames + salted PBKDF2-SHA-256 credentials; device-local; never part of league JSON |
+| `bball_tm_session_v1` | `{v: 2, accountId, sessionVersion, signedInAt}` | sign-in session; `localStorage` when *Keep me signed in*, otherwise `sessionStorage`; never part of league JSON |
+| `league.access` (legacy, inside old league documents) | `{admin: hash, teams: {teamId: hash}}` | old passcode hashes used only for one-time account upgrade; omitted from exports and restored documents |
 
 ---
 
@@ -470,11 +479,10 @@ things:
   streaks, game flow, shot zones;
 * `sample-data.json`: v3 shape, photo/colour validity, and the invariant that
   the events of each finished game add up to its final score;
-* **access & roles**: demo passcodes sign in a team and the league, wrong
-  passcodes are refused, permissions follow the role (`canManageTeam`,
-  `canScoreGame`, `canDeleteGame`, `canResetData`), passcodes are stored as
-  salted hashes that never appear in the serialised league, and the session
-  key is separate from league data and restored by a fresh module instance.
+* **accounts & roles**: team and league registration, username/password sign-in,
+  validation, salted PBKDF2 credentials in a separate key, private team accounts,
+  league-wide stats permission, owner-only password changes, legacy passcode
+  upgrade, session restoration/invalidation and deleted-club rejection.
 
 The same files run unchanged in the browser — the pure modules
 (`storage.js`, `stats.js`, `analytics.js`, `theme.js`) never touch the DOM at
@@ -528,11 +536,11 @@ original file is downloadable from **Data → Download pre-upgrade v1 backup**.
 **Print is missing parts of the page.** Only the report sheet prints — build a
 report in **Reports**, then print.
 
-**“That passcode does not match…”** Until league management sets a custom one,
-the demo passcodes are `team` (any club) and `league` (management). If they were
-replaced and forgotten, clear the *site data* for the page and import your JSON
-backup — passcodes travel with the league, so use a backup made before the
-change, or reset a club's passcode from **Data → Access & roles**.
+**“Username or password is incorrect.”** Use the username created on this
+browser/device. Old shared demo passcodes no longer sign in. If you previously
+had a custom passcode, choose **Create account** and enter that passcode once to
+upgrade. Passwords cannot be recovered from the stored hash; there is no cloud
+reset. Clearing site data removes local accounts, so export league data first.
 
 **The sign-in gate keeps coming back.** *Keep me signed in* writes the session
 to `localStorage`; without it the session lives in `sessionStorage` and ends
@@ -583,10 +591,10 @@ MIT licensed. See `LICENSE (MIT)`.
 v4 is a presentation and access layer on top of the same schema v3 document —
 no migration is needed and every existing install keeps working.
 
-* **Sign-in gate** (`js/auth.js`): Team or League account, hashed passcodes,
-  a device-scoped session in `bball_tm_session_v1`, cross-tab lock.
-* **Access & roles** (`js/access.js`): management-only passcode panel in the
-  Data tab; per-club status and reset-to-demo.
+* **Account gate** (`js/auth.js`): Team and League username/password creation,
+  PBKDF2-SHA-256 credentials, device-scoped sessions and cross-tab lock.
+* **Access & roles** (`js/access.js`): management-only league stats directory;
+  team usernames and password controls stay private.
 * **Broadcast chrome**: black header with a League Pass pill, cup band, league
   ticker, account button and a horizontally scrolling score strip with
   generated club crests.
@@ -597,5 +605,6 @@ no migration is needed and every existing install keeps working.
   account, the Schedule form locks your club as home team, Box Scores hides
   delete for non-management, the Teams tab is scoped to your roster and the
   Data tab is hidden.
-* **Tests**: four new access/role checks (45 total); `js/auth.js` is pure
-  enough to run in the existing Node harness.
+* **Tests**: account/role checks cover registration, privacy, password changes,
+  legacy upgrade and sessions (48 smoke tests total); `js/auth.js` runs in the
+  existing Node harness with Web Crypto.

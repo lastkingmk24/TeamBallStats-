@@ -124,6 +124,7 @@ html[data-theme="dark"] {
 /* -------------------------------- 2. base -------------------------------- */
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 
 html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
 
@@ -985,6 +986,7 @@ footer {
   z-index: 500;
   display: flex;
   align-items: center;
+  align-items: safe center;
   justify-content: center;
   padding: clamp(.75rem, 2.4vw, 2rem);
   overflow-y: auto;
@@ -1100,6 +1102,37 @@ html:not(.has-session) body { overflow: hidden; }
 }
 .auth-card-head p { font-size: .82rem; color: rgba(255, 255, 255, .6); }
 
+.auth-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: .25rem;
+  padding: .25rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .045);
+}
+.auth-mode-switch button {
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, .66);
+  padding: .48rem .6rem;
+  font-size: .8rem;
+  font-weight: 800;
+}
+.auth-mode-switch button.is-selected {
+  background: var(--lp-gold);
+  color: #16110a;
+}
+.auth-field-hint { color: rgba(255, 255, 255, .52) !important; font-size: .7rem !important; line-height: 1.4; }
+.auth-local-note {
+  padding-top: .65rem;
+  border-top: 1px solid rgba(255, 255, 255, .1);
+  color: rgba(255, 255, 255, .5);
+  font-size: .68rem;
+  line-height: 1.45;
+}
 .role-picker { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-bottom: 1rem; }
 .role-card {
   display: flex;
@@ -1264,6 +1297,7 @@ input.is-invalid { border-color: #ff5d73 !important; box-shadow: 0 0 0 3px rgba(
 .access-summary strong { color: var(--text); font-size: 1rem; display: block; }
 .access-table { margin-top: .9rem; }
 .access-table caption { display: none; }
+.access-table .row-actions { justify-content: flex-end; }
 .access-locked {
   display: flex;
   gap: .8rem;
@@ -2200,6 +2234,7 @@ html[data-theme="dark"] .avatar { border-color: rgba(255, 255, 255, .22); }
 .modal-body { padding: 1.2rem; }
 .modal-footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: .6rem;
   padding: .9rem 1.2rem;

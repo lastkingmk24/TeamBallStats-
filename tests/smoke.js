@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const assert = require('assert');
+const { webcrypto } = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..');
 const DB_KEY = 'bball_tm_v1';
@@ -93,10 +94,15 @@ function plain(value) {
 }
 
 let passed = 0;
+const pendingChecks = [];
 function check(name, fn) {
-  fn();
-  passed++;
-  console.log('  ✓ ' + name);
+  const result = fn();
+  if (result && typeof result.then === 'function') {
+    pendingChecks.push(result.then(() => { passed++; console.log('  ✓ ' + name); }));
+  } else {
+    passed++;
+    console.log('  ✓ ' + name);
+  }
 }
 
 const PHOTO = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -581,7 +587,7 @@ check('shotZones classifies makes, misses and court zones', () => {
 function authContext(seed) {
   const mem = memoryStore(seed);
   const sessionStore = {};
-  const sandbox = { console: console, localStorage: mem.localStorage };
+  const sandbox = { console: console, localStorage: mem.localStorage, crypto: webcrypto, TextEncoder: TextEncoder };
   sandbox.sessionStorage = {
     getItem: k => (Object.prototype.hasOwnProperty.call(sessionStore, k) ? sessionStore[k] : null),
     setItem: (k, v) => { sessionStore[k] = String(v); },
@@ -596,110 +602,212 @@ function authContext(seed) {
   return { TBS: sandbox.TBS, store: mem.store, sessionStore: sessionStore };
 }
 
-check('auth: demo passcodes sign in a team and the league, and reject a wrong one', () => {
+function legacyHashForTest(code) {
+  const text = 'tbs::gate::v4::' + code;
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = ((h1 ^ c) * 16777619) >>> 0;
+    h2 = (h2 + Math.imul(c, i + 7)) >>> 0;
+    h2 = (h2 ^ (h2 >>> 13)) >>> 0;
+  }
+  const hex = n => ('00000000' + n.toString(16)).slice(-8);
+  return 'h1$' + hex(h1) + hex(h2);
+}
+
+check('auth: teams and league management create username/password accounts and sign in', async () => {
   const ctx = authContext();
   const auth = ctx.TBS.auth;
   const state = ctx.TBS.storage.defaultData();
   const teamId = state.league.primaryTeamId;
 
-  const teamTry = auth.signIn(state, { role: 'team', teamId: teamId, passcode: 'team', remember: false });
-  assert.strictEqual(teamTry.ok, true);
+  const team = await auth.register(state, {
+    role: 'team', teamId, username: 'Hawks_23', password: 'correct horse', confirmPassword: 'correct horse', remember: false
+  });
+  assert.strictEqual(team.ok, true);
   assert.strictEqual(auth.role(), 'team');
   assert.strictEqual(auth.myTeamId(), teamId);
+  assert.strictEqual(auth.myUsername(), 'hawks_23');
   assert.strictEqual(auth.canManageLeague(), false);
   assert.strictEqual(auth.canManageTeam(teamId), true);
   assert.strictEqual(auth.canManageTeam('team-other'), false);
+  assert.strictEqual(auth.canViewTeamStats('team-other'), true);
   assert.strictEqual(auth.canScoreGame({ homeTeamId: teamId, awayTeamId: 'x' }), true);
   assert.strictEqual(auth.canScoreGame({ homeTeamId: 'a', awayTeamId: 'b' }), false);
   assert.strictEqual(auth.canDeleteGame(), false);
   assert.strictEqual(auth.canResetData(), false);
 
   auth.signOut({ silent: true });
-  assert.strictEqual(auth.isSignedIn(), false);
-
-  const bad = auth.signIn(state, { role: 'team', teamId: teamId, passcode: 'nope' });
+  const bad = await auth.signIn(state, { username: 'hawks_23', password: 'wrong password' });
   assert.strictEqual(bad.ok, false);
-  assert.ok(bad.error.length > 0);
+  assert.ok(/incorrect/i.test(bad.error));
   assert.strictEqual(auth.isSignedIn(), false);
+  const good = await auth.signIn(state, { username: 'HAWKS_23', password: 'correct horse', role: 'commissioner' });
+  assert.strictEqual(good.ok, true);
+  assert.strictEqual(auth.role(), 'team', 'a supplied role cannot elevate a username sign-in');
 
-  const admin = auth.signIn(state, { role: 'commissioner', passcode: 'league' });
+  const duplicate = await auth.register(state, {
+    role: 'team', teamId, username: 'hawks_23', password: 'another password', confirmPassword: 'another password'
+  });
+  assert.strictEqual(duplicate.ok, false);
+  const duplicateClub = await auth.register(state, {
+    role: 'team', teamId, username: 'other_hawks', password: 'another password', confirmPassword: 'another password'
+  });
+  assert.strictEqual(duplicateClub.ok, false);
+
+  auth.signOut({ silent: true });
+  const admin = await auth.register(state, {
+    role: 'commissioner', username: 'league.office', password: 'league password', confirmPassword: 'league password'
+  });
   assert.strictEqual(admin.ok, true);
   assert.strictEqual(auth.isAdmin(), true);
   assert.strictEqual(auth.canManageLeague(), true);
+  assert.strictEqual(auth.canViewTeamStats(teamId), true);
   assert.strictEqual(auth.canDeleteGame(), true);
   assert.strictEqual(auth.canResetData(), true);
-  assert.strictEqual(auth.focusTeamId(state), state.league.primaryTeamId);
+  const registry = JSON.parse(ctx.store[auth.ACCOUNTS_KEY]);
+  const teamAccount = registry.accounts.find(a => a.role === 'team');
+  assert.strictEqual(auth.canManageAccount(teamAccount.id), false, 'league management cannot manage a team account');
+  assert.strictEqual(auth.canManageAccount(registry.accounts.find(a => a.role === 'commissioner').id), true);
+  const duplicateAdmin = await auth.register(state, {
+    role: 'commissioner', username: 'league.second', password: 'league password', confirmPassword: 'league password'
+  });
+  assert.strictEqual(duplicateAdmin.ok, false);
 });
 
-check('auth: passcodes are stored as salted hashes and never in plain text', () => {
+check('auth: passwords are salted PBKDF2 hashes in a separate key, never in league backups', async () => {
   const ctx = authContext();
   const auth = ctx.TBS.auth;
   const state = ctx.TBS.storage.defaultData();
-  const teamId = state.league.primaryTeamId;
+  const before = JSON.stringify(state);
+  const result = await auth.register(state, {
+    role: 'team', teamId: state.league.primaryTeamId, username: 'private_team',
+    password: 'secret password', confirmPassword: 'secret password', remember: true
+  });
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(JSON.stringify(state), before, 'registration does not rewrite league data');
+  assert.strictEqual(ctx.store[DB_KEY], undefined);
+  const raw = ctx.store[auth.ACCOUNTS_KEY];
+  assert.strictEqual(raw.indexOf('secret password'), -1);
+  const registry = JSON.parse(raw);
+  const credential = registry.accounts[0].credential;
+  assert.strictEqual(credential.algorithm, 'PBKDF2-SHA-256');
+  assert.strictEqual(credential.iterations, auth.PBKDF2_ITERATIONS);
+  assert.ok(credential.salt.length >= 20);
+  assert.ok(credential.hash.length >= 40);
 
-  assert.strictEqual(auth.setPasscode(state, 'commissioner', '', 'run-the-league'), true);
-  assert.strictEqual(auth.setPasscode(state, 'team', teamId, 'go-hawks'), true);
+  const admin = await auth.register(state, {
+    role: 'commissioner', username: 'private_league', password: 'secret password', confirmPassword: 'secret password'
+  });
+  assert.strictEqual(admin.ok, true);
+  const accounts = JSON.parse(ctx.store[auth.ACCOUNTS_KEY]).accounts;
+  assert.notStrictEqual(accounts[0].credential.salt, accounts[1].credential.salt);
+  assert.notStrictEqual(accounts[0].credential.hash, accounts[1].credential.hash);
 
-  const serialised = JSON.stringify(ctx.TBS.storage.coerce(state));
-  assert.strictEqual(serialised.indexOf('run-the-league'), -1);
-  assert.strictEqual(serialised.indexOf('go-hawks'), -1);
-  assert.strictEqual(auth.hash('go-hawks'), auth.hash('go-hawks'));
-  assert.notStrictEqual(auth.hash('go-hawks'), auth.hash('go-hawkS'));
-
-  assert.strictEqual(auth.verify(state, 'commissioner', '', 'league'), false);
-  assert.strictEqual(auth.verify(state, 'commissioner', '', 'run-the-league'), true);
-  assert.strictEqual(auth.verify(state, 'team', teamId, 'team'), false);
-  assert.strictEqual(auth.verify(state, 'team', teamId, 'go-hawks'), true);
-  assert.strictEqual(auth.hasCustomPasscode(state, 'team', teamId), true);
-  assert.strictEqual(auth.hasCustomPasscode(state, 'commissioner', ''), true);
-  assert.strictEqual(auth.verify(state, 'team', 'no-such-team', 'go-hawks'), false);
+  state.league = state.league || {};
+  state.league.access = { admin: 'h1$legacy', teams: { t1: 'h1$legacy' } };
+  const backup = ctx.TBS.storage.withoutCredentials(state);
+  assert.strictEqual(backup.league.access, undefined);
+  assert.strictEqual(JSON.stringify(backup).indexOf('private_team'), -1);
+  assert.strictEqual(JSON.stringify(backup).indexOf('secret password'), -1);
+  assert.ok(state.league.access, 'the source document is not mutated by backup sanitising');
 });
 
-check('auth: the session key is separate from league data and survives a reload', () => {
+check('auth: username/password validation and confirmation are enforced', async () => {
   const ctx = authContext();
   const auth = ctx.TBS.auth;
   const state = ctx.TBS.storage.defaultData();
-  auth.signIn(state, { role: 'commissioner', passcode: 'league', remember: true });
+  const base = { role: 'team', teamId: state.league.primaryTeamId, username: 'valid_user', password: 'long enough', confirmPassword: 'long enough' };
+  assert.strictEqual((await auth.register(state, Object.assign({}, base, { username: 'ab' }))).ok, false);
+  assert.strictEqual((await auth.register(state, Object.assign({}, base, { username: 'bad user' }))).ok, false);
+  assert.strictEqual((await auth.register(state, Object.assign({}, base, { password: 'short', confirmPassword: 'short' }))).ok, false);
+  assert.strictEqual((await auth.register(state, Object.assign({}, base, { confirmPassword: 'different' }))).ok, false);
+  assert.strictEqual((await auth.register(state, Object.assign({}, base, { password: '        ', confirmPassword: '        ' }))).ok, false);
+  assert.strictEqual((await auth.register(state, base)).ok, true);
+});
 
+check('auth: only the signed-in owner can change a password, and old sessions are invalidated', async () => {
+  const ctx = authContext();
+  const auth = ctx.TBS.auth;
+  const state = ctx.TBS.storage.defaultData();
+  await auth.register(state, {
+    role: 'team', teamId: state.league.primaryTeamId, username: 'owner_only',
+    password: 'old password', confirmPassword: 'old password', remember: true
+  });
+  const oldSession = ctx.store[auth.SESSION_KEY];
+  assert.strictEqual((await auth.changePassword({ currentPassword: 'wrong', password: 'new password', confirmPassword: 'new password' })).ok, false);
+  assert.strictEqual((await auth.changePassword({ currentPassword: 'old password', password: 'new password', confirmPassword: 'mismatch' })).ok, false);
+  assert.strictEqual((await auth.changePassword({ currentPassword: 'old password', password: 'new password', confirmPassword: 'new password' })).ok, true);
+  assert.strictEqual((await auth.signIn(state, { username: 'owner_only', password: 'old password' })).ok, false);
+  assert.strictEqual((await auth.signIn(state, { username: 'owner_only', password: 'new password' })).ok, true);
+
+  const again = authContext({ [auth.SESSION_KEY]: oldSession, [auth.ACCOUNTS_KEY]: ctx.store[auth.ACCOUNTS_KEY] });
+  assert.strictEqual(again.TBS.auth.restore(state), null, 'a session from before the password change is rejected');
+  auth.signOut({ silent: true });
+  assert.strictEqual(auth.current(), null);
+  assert.strictEqual(ctx.store[auth.SESSION_KEY], undefined);
+  assert.strictEqual(ctx.sessionStore[auth.SESSION_KEY], undefined);
+});
+
+check('auth: a legacy custom passcode can upgrade once, then cannot sign in', async () => {
+  const ctx = authContext();
+  const auth = ctx.TBS.auth;
+  const state = ctx.TBS.storage.defaultData();
+  state.league = state.league || {};
+  state.league.access = { admin: legacyHashForTest('old-league-code') };
+  assert.strictEqual(auth.hasLegacyPasscode(state, 'commissioner', ''), true);
+  const base = { role: 'commissioner', username: 'upgraded_league', password: 'new password', confirmPassword: 'new password' };
+  assert.strictEqual((await auth.register(state, base)).ok, false);
+  assert.strictEqual((await auth.register(state, Object.assign({}, base, { legacyPasscode: 'wrong' }))).ok, false);
+  assert.strictEqual((await auth.register(state, Object.assign({}, base, { legacyPasscode: 'old-league-code' }))).ok, true);
+  assert.strictEqual(auth.hasLegacyPasscode(state, 'commissioner', ''), false, 'the registered account supersedes legacy access');
+  auth.signOut({ silent: true });
+  assert.strictEqual((await auth.signIn(state, { username: 'upgraded_league', password: 'old-league-code' })).ok, false);
+  assert.strictEqual((await auth.signIn(state, { username: 'upgraded_league', password: 'new password' })).ok, true);
+});
+
+check('auth: the session key is separate from league data and survives a reload', async () => {
+  const ctx = authContext();
+  const auth = ctx.TBS.auth;
+  const state = ctx.TBS.storage.defaultData();
+  await auth.register(state, {
+    role: 'commissioner', username: 'league_user', password: 'league password', confirmPassword: 'league password', remember: true
+  });
   assert.strictEqual(auth.SESSION_KEY, 'bball_tm_session_v1');
   assert.strictEqual(DB_KEY, 'bball_tm_v1');
-  assert.ok(ctx.store[auth.SESSION_KEY], 'session persisted under its own key');
-  assert.strictEqual(ctx.store[DB_KEY], undefined, 'signing in never writes league data');
+  assert.ok(ctx.store[auth.SESSION_KEY]);
+  assert.strictEqual(ctx.store[DB_KEY], undefined);
+  const session = JSON.parse(ctx.store[auth.SESSION_KEY]);
+  assert.strictEqual(session.v, 2);
+  assert.ok(session.accountId);
+  assert.strictEqual(session.password, undefined);
 
-  /* A fresh module instance (a reload) restores the same session. */
-  const again = authContext({ [auth.SESSION_KEY]: ctx.store[auth.SESSION_KEY] });
-  const restored = again.TBS.auth.restore();
+  const again = authContext({ [auth.SESSION_KEY]: ctx.store[auth.SESSION_KEY], [auth.ACCOUNTS_KEY]: ctx.store[auth.ACCOUNTS_KEY] });
+  const restored = again.TBS.auth.restore(state);
   assert.strictEqual(restored.role, 'commissioner');
   assert.strictEqual(again.TBS.auth.isAdmin(), true);
-
   again.TBS.auth.signOut({ silent: true });
-  assert.strictEqual(again.sessionStore[auth.SESSION_KEY], undefined);
-  assert.strictEqual(again.store[auth.SESSION_KEY], undefined);
   assert.strictEqual(again.TBS.auth.current(), null);
 });
 
-check('auth: a team session for a deleted club is rejected', () => {
+check('auth: a team account for a deleted club cannot sign in or restore', async () => {
   const ctx = authContext();
   const auth = ctx.TBS.auth;
   const state = ctx.TBS.storage.defaultData();
   const teamId = state.league.primaryTeamId;
-  const res = auth.signIn(state, { role: 'team', teamId: 'team-ghost', passcode: 'team' });
-  assert.strictEqual(res.ok, false);
-  assert.ok(/no longer exists/i.test(res.error));
-  assert.strictEqual(auth.isSignedIn(), false);
-
-  /* Signed in, then the club disappears from the league. */
-  auth.signIn(state, { role: 'team', teamId: teamId, passcode: 'team', remember: false });
+  await auth.register(state, {
+    role: 'team', teamId, username: 'deleted_club', password: 'team password', confirmPassword: 'team password', remember: true
+  });
   assert.strictEqual(auth.canManageTeam(teamId), true);
   const shrunk = ctx.TBS.storage.coerce({
-    version: 3,
-    teams: [{ id: 'team-survivor', name: 'Survivors', primary: true }],
-    players: [], games: [], schedule: []
+    version: 3, teams: [{ id: 'team-survivor', name: 'Survivors', primary: true }], players: [], games: [], schedule: []
   });
-  /* The session still names the deleted club: it grants nothing in the new one. */
-  assert.strictEqual(shrunk.teams.some(t => t.id === teamId), false);
-  assert.strictEqual(auth.canManageTeam(teamId), true, 'the session still names the old club');
-  assert.strictEqual(auth.canManageTeam('team-survivor'), false, 'and grants nothing in the new one');
+  assert.strictEqual(auth.restore(shrunk), null);
+  assert.strictEqual(auth.isSignedIn(), false);
+  assert.strictEqual(auth.canManageTeam('team-survivor'), false);
+  const res = await auth.signIn(shrunk, { username: 'deleted_club', password: 'team password' });
+  assert.strictEqual(res.ok, false);
+  assert.ok(/no longer exists/i.test(res.error));
 });
 
 /* ------------------------------ sample data ----------------------------- */
@@ -748,4 +856,6 @@ check('summarize() reports v3 counts including photos and play events', () => {
   assert.strictEqual(summary.statLines, 18);
 });
 
-console.log('\n✅ ' + passed + ' smoke tests passed (Node built-ins only).');
+Promise.all(pendingChecks).then(() => {
+  console.log('\n✅ ' + passed + ' smoke tests passed (Node built-ins only).');
+}).catch(err => { console.error(err); process.exitCode = 1; });
