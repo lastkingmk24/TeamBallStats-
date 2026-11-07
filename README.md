@@ -350,13 +350,17 @@ from storage and importing a backup file.
      `games[].events = []`, `events[].shot = null`
    * `meta.migratedFrom / migratedTo / migratedAt`, `meta.legacyCounts` and
      `meta.upgrades[]` are recorded (e.g. `[{from:1,to:2},{from:2,to:3}]`).
-4. **Back up** — when a legacy (v1) document is detected, its **raw text** is
+   Malformed input is handled defensively: `null`/string entries in legacy
+   arrays are skipped instead of becoming placeholder records, and anything
+   that still carries an id or a name is kept (an id-only player becomes
+   “Unnamed player” rather than disappearing).
+5. **Back up** — when a legacy (v1) document is detected, its **raw text** is
    copied to `bball_tm_v1_pre_v2_backup` **once**, and only if that key is empty.
-5. **Guard** — before persisting an upgrade, `storage.preservesEverything()`
+6. **Guard** — before persisting an upgrade, `storage.preservesEverything()`
    asserts that no team, player, game, stat line, play event or schedule item
    disappeared. If the check fails, the original document is kept and nothing is
    overwritten.
-6. **Persist** — otherwise the upgraded document is written back to
+7. **Persist** — otherwise the upgraded document is written back to
    `bball_tm_v1`. `storage.getLastLoad()` reports
    `{ from, to, migrated, persisted }` and the app shows a one-time toast
    (“Upgraded your existing v1 data — every player, game and event was kept”).

@@ -280,6 +280,30 @@ check('coerce() repairs sparse documents with v3 defaults', () => {
   assert.strictEqual(sparse.teams[0].color, '');
 });
 
+check('junk and null entries are ignored, not turned into placeholder records', () => {
+  const messy = {
+    players: [null, { id: 'x', name: 'Real Player', number: '7' }, { id: 'y' }, 'junk', []],
+    games: [null, 'junk', { id: 'g1', opponent: 'Rivals', teamScore: 50, stats: [null, { playerId: 'x', pts: 9 }] }],
+    schedule: [null, { id: 's1', opponent: 'Rivals', date: '2026-01-02' }]
+  };
+  const clean = v2ctx.TBS.storage.coerce(messy);
+  assert.strictEqual(clean.players.length, 2);
+  assert.strictEqual(clean.players[0].name, 'Real Player');
+  assert.strictEqual(clean.players[1].name, 'Unnamed player');
+  assert.strictEqual(clean.players[0].number, 7);
+  assert.strictEqual(clean.games.length, 1);
+  assert.strictEqual(clean.games[0].stats.length, 1);
+  assert.strictEqual(clean.games[0].stats[0].pts, 9);
+  assert.strictEqual(clean.schedule.length, 1);
+  assert.strictEqual(v2ctx.TBS.storage.preservesEverything(messy, clean), true);
+});
+
+check('the write guard still blocks a real loss', () => {
+  const before = { players: [{ name: 'A' }, { name: 'B' }], teams: [], games: [], schedule: [] };
+  const after = v2ctx.TBS.storage.coerce({ version: 3, teams: [], players: [{ name: 'A' }], games: [], schedule: [] });
+  assert.strictEqual(v2ctx.TBS.storage.preservesEverything(before, after), false);
+});
+
 check('the write guard refuses lossy upgrades', () => {
   const before = { players: [1, 2, 3], teams: [1], games: [{ stats: [1, 2], events: [] }], schedule: [] };
   const after = v2ctx.TBS.storage.coerce({ version: 3, teams: [], players: [], games: [], schedule: [] });

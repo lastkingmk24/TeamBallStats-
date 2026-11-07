@@ -53,7 +53,11 @@
     canvas.width = Math.round(cssWidth * dpr);
     canvas.height = Math.round(cssHeight * dpr);
     canvas.style.height = cssHeight + 'px';
-    const ctx = canvas.getContext('2d');
+    let ctx = null;
+    try { ctx = canvas.getContext('2d'); } catch (_) { ctx = null; }
+    /* Canvas can be unavailable (old browser, blocked canvas, headless run).
+     * A missing 2D context must never stop a view from rendering. */
+    if (!ctx || typeof ctx.setTransform !== 'function') return null;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return { ctx: ctx, width: cssWidth, height: cssHeight };
   }

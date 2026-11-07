@@ -265,8 +265,7 @@
       awayTeamId = ensureTeamById(ctx.teams, uid('team'), 'Opponent').id;
     }
 
-    const stats = (Array.isArray(g.stats) ? g.stats : []).map(rawLine => {
-      const s = rawLine || {};
+    const stats = records(g.stats).filter(rawLine => str(rawLine.playerId, '')).map(s => {
       const playerId = str(s.playerId, '');
       const player = ctx.players.find(p => p.id === playerId);
       const line = blankStats(playerId, str(s.teamId, player ? player.teamId : homeTeamId));
@@ -339,20 +338,22 @@
     });
 
     const seenTeamIds = new Set();
-    out.teams = (Array.isArray(src.teams) ? src.teams : []).map(t => {
-      const item = t || {};
-      let id = str(item.id, '') || uid('team');
-      if (seenTeamIds.has(id)) id = uid('team');
-      seenTeamIds.add(id);
-      const name = str(item.name, 'Team');
-      return keepExtras(item, {
-        id: id,
-        name: name,
-        short: str(item.short, name.slice(0, 3).toUpperCase()) || 'T',
-        color: normalizeColor(item.color),
-        primary: item.primary === true
+    out.teams = records(src.teams)
+      .filter(t => str(t.name, '') || str(t.id, ''))
+      .map(item => {
+        let id = str(item.id, '') || uid('team');
+        if (seenTeamIds.has(id)) id = uid('team');
+        seenTeamIds.add(id);
+        /* id-only teams are kept so their players and games stay attached */
+        const name = str(item.name, 'Team');
+        return keepExtras(item, {
+          id: id,
+          name: name,
+          short: str(item.short, name.slice(0, 3).toUpperCase()) || 'T',
+          color: normalizeColor(item.color),
+          primary: item.primary === true
+        });
       });
-    });
     if (!out.teams.length) out.teams = [primaryTeamStub()];
 
     const primary = out.teams.find(t => t.id === out.league.primaryTeamId) ||
@@ -361,25 +362,30 @@
     out.league.primaryTeamId = primary.id;
 
     const seenPlayerIds = new Set();
-    out.players = (Array.isArray(src.players) ? src.players : []).map(p => {
-      const item = p || {};
-      let id = str(item.id, '') || uid('player');
-      if (seenPlayerIds.has(id)) id = uid('player');
-      seenPlayerIds.add(id);
-      let teamId = str(item.teamId, out.league.primaryTeamId);
-      if (!out.teams.some(t => t.id === teamId)) teamId = out.league.primaryTeamId;
-      return keepExtras(item, {
-        id: id,
-        teamId: teamId,
-        name: str(item.name, 'Player'),
-        number: Math.max(0, Math.min(99, Math.round(num(item.number, 0)))),
-        position: str(item.position, '').toUpperCase(),
-        active: item.active !== false,
-        photo: normalizePhoto(item.photo)
+    out.players = records(src.players)
+      .filter(p => str(p.name, '') || str(p.id, ''))
+      .map(item => {
+        let id = str(item.id, '') || uid('player');
+        if (seenPlayerIds.has(id)) id = uid('player');
+        seenPlayerIds.add(id);
+        let teamId = str(item.teamId, out.league.primaryTeamId);
+        if (!out.teams.some(t => t.id === teamId)) teamId = out.league.primaryTeamId;
+        return keepExtras(item, {
+          id: id,
+          teamId: teamId,
+          name: str(item.name, 'Unnamed player'),
+          number: Math.max(0, Math.min(99, Math.round(num(item.number, 0)))),
+          position: str(item.position, '').toUpperCase(),
+          active: item.active !== false,
+          photo: normalizePhoto(item.photo)
+        });
       });
-    });
 
-    out.games = (Array.isArray(src.games) ? src.games : []).map(g => normalizeGame(g, out));
+    out.games = records(src.games)
+      .filter(g => str(g.id, '') || str(g.date, '') || str(g.homeTeamId, '') ||
+        str(g.awayTeamId, '') || str(g.opponent, '') ||
+        records(g.stats).length || records(g.events).length)
+      .map(g => normalizeGame(g, out));
 
     const seenGameIds = new Set();
     out.games.forEach(g => {
@@ -387,9 +393,9 @@
       seenGameIds.add(g.id);
     });
 
-    out.schedule = (Array.isArray(src.schedule) ? src.schedule : []).map(s => {
-      const item = s || {};
-      return keepExtras(item, {
+    out.schedule = records(src.schedule)
+      .filter(s => str(s.title, '') || str(s.opponent, '') || str(s.gameId, '') || str(s.date, ''))
+      .map(item => keepExtras(item, {
         id: str(item.id, '') || uid('event'),
         date: str(item.date, todayISO()),
         time: str(item.time, ''),
@@ -398,8 +404,7 @@
         location: str(item.location, ''),
         gameId: str(item.gameId, '') || null,
         notes: str(item.notes, '')
-      });
-    });
+      }));
 
     const meta = (src.meta && typeof src.meta === 'object') ? src.meta : {};
     const upgrades = normalizeUpgrades(meta);
@@ -446,12 +451,13 @@
     out.teams[0].short = teamName.slice(0, 3).toUpperCase() || 'MY';
     const primaryId = out.teams[0].id;
 
-    (Array.isArray(v1.players) ? v1.players : []).forEach(p => {
-      const item = p || {};
+    records(v1.players).forEach(item => {
+      /* Keep identified players even if the name was lost; drop bare junk. */
+      if (!str(item.name, '') && !str(item.id, '')) return;
       out.players.push(keepExtras(item, {
         id: str(item.id, '') || uid('player'),
         teamId: primaryId,
-        name: str(item.name, 'Player'),
+        name: str(item.name, 'Unnamed player'),
         number: Math.max(0, Math.min(99, Math.round(num(item.number, 0)))),
         position: str(item.position, '').toUpperCase(),
         active: true,
@@ -459,12 +465,12 @@
       }));
     });
 
-    (Array.isArray(v1.games) ? v1.games : []).forEach(g => {
-      const item = g || {};
+    records(v1.games).forEach(item => {
+      if (!str(item.id, '') && !str(item.opponent, '') && !str(item.date, '') &&
+          !str(item.teamScore, '') && !records(item.stats).length) return;
       const opponentName = str(item.opponent, 'Opponent');
       const away = ensureTeamByName(out.teams, opponentName);
-      const stats = (Array.isArray(item.stats) ? item.stats : []).map(s => {
-        const src = s || {};
+      const stats = records(item.stats).filter(src => str(src.playerId, '')).map(src => {
         const line = blankStats(str(src.playerId, ''), primaryId);
         STAT_FIELDS.forEach(f => { line[f] = Math.max(0, num(src[f], 0)); });
         return keepExtras(src, line);
@@ -494,8 +500,8 @@
       }));
     });
 
-    (Array.isArray(v1.schedule) ? v1.schedule : []).forEach(s => {
-      const item = s || {};
+    records(v1.schedule).forEach(item => {
+      if (!str(item.opponent, '') && !str(item.title, '') && !str(item.date, '')) return;
       const opponent = str(item.opponent, '');
       out.schedule.push(keepExtras(item, {
         id: str(item.id, '') || uid('event'),
@@ -559,20 +565,30 @@
     return Array.isArray(value) ? value.length : 0;
   }
 
+  /* Only real objects are records: nulls, strings and arrays are never
+   * promoted into placeholder teams/players/games during a migration. */
+  function isRecord(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function records(value) {
+    return (Array.isArray(value) ? value : []).filter(isRecord);
+  }
+
   /* Refuse to overwrite the stored document if an upgrade would drop rows.
    * This is a belt-and-braces guard on top of the non-destructive coercers. */
   function preservesEverything(before, after) {
     if (!before || typeof before !== 'object') return true;
-    const statLines = raw => (Array.isArray(raw.games) ? raw.games : [])
-      .reduce((a, g) => a + arrayLength(g && g.stats), 0);
-    const playEvents = raw => (Array.isArray(raw.games) ? raw.games : [])
-      .reduce((a, g) => a + arrayLength(g && g.events), 0);
-    return arrayLength(after.players) >= arrayLength(before.players) &&
-      arrayLength(after.teams) >= arrayLength(before.teams) &&
-      arrayLength(after.games) >= arrayLength(before.games) &&
-      arrayLength(after.schedule) >= arrayLength(before.schedule) &&
-      after.games.reduce((a, g) => a + g.stats.length, 0) >= statLines(before) &&
-      after.games.reduce((a, g) => a + g.events.length, 0) >= playEvents(before);
+    const statLines = raw => records(raw.games)
+      .reduce((a, g) => a + records(g.stats).length, 0);
+    const playEvents = raw => records(raw.games)
+      .reduce((a, g) => a + records(g.events).length, 0);
+    return records(after.players).length >= records(before.players).length &&
+      records(after.teams).length >= records(before.teams).length &&
+      records(after.games).length >= records(before.games).length &&
+      records(after.schedule).length >= records(before.schedule).length &&
+      records(after.games).reduce((a, g) => a + records(g.stats).length, 0) >= statLines(before) &&
+      records(after.games).reduce((a, g) => a + records(g.events).length, 0) >= playEvents(before);
   }
 
   let lastLoad = { from: SCHEMA_VERSION, to: SCHEMA_VERSION, migrated: false, persisted: false };
