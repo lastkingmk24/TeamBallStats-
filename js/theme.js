@@ -88,8 +88,8 @@
     const btn = doc.querySelector('#theme-toggle');
     if (!btn) return;
     const next = mode === 'dark' ? 'light' : 'dark';
-    btn.innerHTML = (TBS.ui && TBS.ui.icon ? TBS.ui.icon(next === 'dark' ? 'moon' : 'sun') : '') +
-      '<span class="theme-toggle-text">' + (mode === 'dark' ? 'Light' : 'Dark') + '</span>';
+    /* Icon-only round control (the label lives in title + aria-label). */
+    btn.innerHTML = (TBS.ui && TBS.ui.icon ? TBS.ui.icon(mode === 'dark' ? 'sun' : 'moon') : '');
     btn.setAttribute('aria-label', 'Switch to ' + next + ' theme');
     btn.setAttribute('title', 'Switch to ' + next + ' theme (appearance is saved on this device)');
     btn.setAttribute('aria-pressed', mode === 'dark' ? 'true' : 'false');

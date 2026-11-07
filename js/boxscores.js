@@ -193,9 +193,13 @@
     const editBtn = qs('#box-edit-btn');
     const printBtn = qs('#box-print-btn');
     const deleteBtn = qs('#box-delete-btn');
-    editBtn.disabled = !game;
+    const authz = TBS.auth;
+    const canScore = !authz || authz.canScoreGame(game);
+    const canDelete = !authz || authz.canDeleteGame();
+    editBtn.disabled = !game || (!canScore && !editMode);
     printBtn.disabled = !game;
-    deleteBtn.disabled = !game;
+    deleteBtn.disabled = !game || !canDelete;
+    deleteBtn.hidden = !canDelete;
     editBtn.textContent = editMode ? 'Cancel editing' : 'Edit box score';
 
     const host = qs('#box-content');
@@ -288,6 +292,10 @@
 
     qs('#box-edit-btn').addEventListener('click', () => {
       const game = activeGame(TBS.app.getState());
+      if (!editMode && TBS.auth && !TBS.auth.canScoreGame(game)) {
+        ui.toast('Only the two clubs in this game (or league management) can edit its box score.', 'error');
+        return;
+      }
       if (editMode) { editMode = false; draft = null; }
       else if (game) { editMode = true; draft = makeDraft(game); }
       render(TBS.app.getState());
@@ -301,6 +309,10 @@
     qs('#box-delete-btn').addEventListener('click', () => {
       const game = activeGame(TBS.app.getState());
       if (!game) return;
+      if (TBS.auth && !TBS.auth.canDeleteGame()) {
+        ui.toast('Only league management can delete a game.', 'error');
+        return;
+      }
       if (!ui.confirmDanger('Delete this game and its entire box score? This cannot be undone.')) return;
       selectedGameId = null;
       editMode = false;

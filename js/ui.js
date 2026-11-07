@@ -123,7 +123,14 @@
     chart: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 20V4M4 20h16M8 16v-5M12.5 16V7M17 16v-8"/></svg>',
     keyboard: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M6 13.5h.01M18 13.5h.01M9.5 14h5"/></svg>',
     print: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 9V4h10v5M7 18H5a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><rect x="7" y="14" width="10" height="7" rx="1"/></svg>',
-    undo: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9h9a5.5 5.5 0 1 1 0 11H7M4 9l4-4M4 9l4 4"/></svg>'
+    undo: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9h9a5.5 5.5 0 1 1 0 11H7M4 9l4-4M4 9l4 4"/></svg>',
+    play: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8.5 5.6 19 12 8.5 18.4Z" fill="currentColor" stroke="none"/></svg>',
+    lock: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/><path d="M12 14.4v2.4"/></svg>',
+    trophy: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 3h10v5a5 5 0 0 1-10 0Z"/><path d="M17 4.5h3v2a3 3 0 0 1-3 3M7 4.5H4v2a3 3 0 0 0 3 3"/><path d="M12 13v4M8.5 20h7"/></svg>',
+    shield: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.2 19.5 6v6.1c0 4.3-3.1 7.2-7.5 8.7-4.4-1.5-7.5-4.4-7.5-8.7V6Z"/><path d="m8.7 12 2.4 2.4 4.2-4.6"/></svg>',
+    user: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8.5" r="3.6"/><path d="M4.6 20.2c.5-4 3.6-6.2 7.4-6.2s6.9 2.2 7.4 6.2"/></svg>',
+    arrow: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4.5 12h14M13 6.5l5.5 5.5L13 17.5"/></svg>',
+    basketball: '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 4.5 6 4.5 9s-1.5 6-4.5 9M12 3c-3 3-4.5 6-4.5 9s1.5 6 4.5 9"/></svg>'
   };
 
   function icon(name) {
@@ -199,6 +206,61 @@
       '<span class="team-swatch" aria-hidden="true"></span>' +
       '<span class="team-abbr">' + esc(team.short || '') + '</span>' +
       '<span class="team-name">' + esc(team.name) + '</span></span>';
+  }
+
+  /* ----------------------------- club marks ------------------------------- */
+
+  /* Small deterministic hash so every club always gets the same shield. */
+  function markSeed(team) {
+    return hashString((team && (team.id || team.name)) || 'team');
+  }
+
+  function markPalette(team) {
+    const seed = markSeed(team);
+    const base = (team && team.color) || '';
+    const fallback = ['#1d428a', '#c8102e', '#0f7b6c', '#7a3ec4', '#b35c00', '#0b6f9c', '#a11c4b'][seed % 7];
+    const primary = base || fallback;
+    const secondary = ['#fdb927', '#ffffff', '#cfe0ff', '#ffd9a8', '#e9f6f2'][seed % 5];
+    return { primary: primary, secondary: secondary };
+  }
+
+  /* Square club logo: shield with abbreviation, or the uploaded crest. */
+  function teamLogo(team, size) {
+    const t = team || {};
+    const palette = markPalette(t);
+    const cls = 'club-logo club-logo-' + (size || 'md');
+    if (t.logo) {
+      return '<span class="' + cls + '" style="--club:' + esc(palette.primary) + '">' +
+        '<img src="' + esc(t.logo) + '" alt="" decoding="async" /></span>';
+    }
+    const abbr = String(t.short || t.name || 'T').slice(0, 4).toUpperCase();
+    const shape = markSeed(t) % 4;
+    const shapes = [
+      '<path d="M32 3 58 11v18c0 15-10.5 24-26 29C16 53 5.5 44 5.5 29V11Z"/>',
+      '<circle cx="32" cy="32" r="28"/>',
+      '<path d="M32 3 62 32 32 61 2 32Z"/>',
+      '<path d="M8 8h48v38c0 8-11 14-24 14S8 54 8 46Z"/>'
+    ];
+    return '<span class="' + cls + '" style="--club:' + esc(palette.primary) +
+      ';--club-2:' + esc(palette.secondary) + '">' +
+      '<svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">' +
+        '<g fill="var(--club)" stroke="var(--club-2)" stroke-width="2.5" stroke-opacity=".65">' +
+          shapes[shape] + '</g>' +
+        '<text x="32" y="39" text-anchor="middle" font-size="' +
+          (abbr.length > 3 ? 17 : 21) + '" font-weight="800" fill="var(--club-2)" ' +
+          'font-family="Arial Black, Helvetica, Arial, sans-serif" letter-spacing="-.5">' +
+          esc(abbr) + '</text>' +
+      '</svg></span>';
+  }
+
+  /* Logo + club name + record, used in score cards and hero blocks. */
+  function teamMark(team, opts) {
+    const o = opts || {};
+    const t = team || {};
+    return '<span class="club-mark' + (o.className ? ' ' + o.className : '') + '">' +
+      teamLogo(t, o.size || 'md') +
+      '<span class="club-mark-text"><strong>' + esc(t.name || 'Unknown team') + '</strong>' +
+        (o.sub ? '<small>' + esc(o.sub) + '</small>' : '') + '</span></span>';
   }
 
   /* -------------------------------- toasts -------------------------------- */
@@ -617,7 +679,7 @@
     options: options, teamOptions: teamOptions, gameOptions: gameOptions,
     statusBadge: statusBadge, resultBadge: resultBadge, badge: badge,
     initials: initials, colorFor: colorFor, avatar: avatar, playerCell: playerCell,
-    teamTag: teamTag,
+    teamTag: teamTag, teamLogo: teamLogo, teamMark: teamMark, markPalette: markPalette,
     openModal: openModal, openDialog: openDialog, closeAllDialogs: closeAllDialogs,
     confirmDanger: confirmDanger, debounce: debounce,
     hashString: hashString

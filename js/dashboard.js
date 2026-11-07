@@ -110,6 +110,246 @@
       '</div>';
   }
 
+  /* ------------------------------ hero card -------------------------------- */
+  /* Big "featured game" card in the shape of a broadcast hero: score line,
+   * two-line headline, WATCH / BOX SCORE actions and related content. */
+
+  function relatedLines(game, state) {
+    const events = (game.events || []).filter(e => e.scoreDelta > 0 || e.type === 'fg3_make');
+    const lines = [];
+    const topLine = (game.stats || []).slice().sort((a, b) => b.pts - a.pts)[0];
+    if (topLine) {
+      const player = state.players.find(p => p.id === topLine.playerId);
+      if (player) {
+        lines.push(player.name + ' leads the way with ' + ui.fmtInt(topLine.pts) + ' points');
+      }
+    }
+    const threes = events.filter(e => e.type === 'fg3_make');
+    if (threes.length) {
+      const shooter = state.players.find(p => p.id === threes[0].playerId);
+      lines.push((shooter ? shooter.name : 'A shooter') + ' connects from deep · ' +
+        threes.length + ' made three' + (threes.length === 1 ? '' : 's'));
+    }
+    if (game.events && game.events.length) {
+      lines.push(game.events.length + ' plays logged in the live console');
+    }
+    if (game.location) lines.push('Played at ' + game.location);
+    return lines.slice(0, 3);
+  }
+
+  function heroScoreTeam(team, score, isWinner) {
+    return '<div class="hero-team' + (isWinner ? ' is-winner' : '') + '">' +
+      ui.teamLogo(team, 'lg') +
+      '<div class="hero-team-text">' +
+        '<span class="hero-team-city">' + ui.esc(team.short || '') + '</span>' +
+        '<span class="hero-team-name">' + ui.esc(team.name) + '</span>' +
+      '</div>' +
+      '<span class="hero-team-score">' + ui.fmtInt(score) + '</span>' +
+    '</div>';
+  }
+
+  function heroHtml(state) {
+    if (!state.games.length) {
+      return ui.emptyState('No games yet',
+        'Add a fixture and it becomes the featured game here — with a box score, recap and shot chart.',
+        '<button type="button" class="btn btn-primary" data-action="go-schedule">+ Create a fixture</button>');
+    }
+
+    const liveGame = state.games.find(g => g.status === 'live');
+    const finals = st.sortByDateDesc(state.games.filter(g => g.status === 'final'));
+    const scheduled = state.games.filter(g => g.status === 'scheduled')
+      .sort((a, b) => String(a.date + a.time).localeCompare(String(b.date + b.time)));
+    const game = liveGame || finals[0] || scheduled[0];
+    if (!game) return '';
+
+    const home = teamOf(state, game.homeTeamId) || { name: 'Unknown team', short: 'UNK' };
+    const away = teamOf(state, game.awayTeamId) || { name: 'Unknown team', short: 'UNK' };
+    const accentTeam = (game.homeTeamId === state.league.primaryTeamId ? home : away);
+    const accent = (accentTeam && accentTeam.color) || '#1d428a';
+
+    const homeWon = Number(game.homeScore) > Number(game.awayScore);
+    const final = game.status === 'final';
+    const title = liveGame
+      ? 'LIVE NOW: ' + (away.short || away.name) + ' AT ' + (home.short || home.name)
+      : final
+        ? ((homeWon ? home : away).name + (/(s)$/i.test((homeWon ? home : away).name) ? ' TOP ' : ' TAKES DOWN ') +
+            (homeWon ? away : home).name).toUpperCase()
+        : ('UP NEXT: ' + (away.short || away.name) + ' AT ' + (home.short || home.name)).toUpperCase();
+
+    const topPerformers = (game.stats || [])
+      .filter(line => line.pts > 0)
+      .sort((a, b) => b.pts - a.pts)
+      .slice(0, 3)
+      .map(line => {
+        const player = state.players.find(p => p.id === line.playerId);
+        if (!player) return '';
+        return '<span class="hero-performer">' + ui.avatar(player, {
+          size: 'sm', team: teamOf(state, player.teamId), showNumber: false
+        }) + '<strong>' + ui.esc(player.name) + '</strong> ' + ui.fmtInt(line.pts) + ' PTS</span>';
+      }).filter(Boolean).join('');
+
+    const related = relatedLines(game, state);
+
+    return '<article class="hero" style="--hero-accent:' + ui.esc(accent) + '" data-game="' + ui.esc(game.id) + '">' +
+      '<div class="hero-banner">' +
+        '<span class="hero-banner-text">STREAM LIKE YOU’RE COURTSIDE</span>' +
+        '<span class="hero-banner-brand">' + ui.icon('trophy') + ' League Pass</span>' +
+        '<button type="button" class="hero-banner-btn" data-action="go-schedule">SIGN UP NOW</button>' +
+      '</div>' +
+      '<div class="hero-body">' +
+        '<div class="hero-scene" aria-hidden="true">' +
+          '<span class="hero-glow"></span>' +
+          '<svg class="hero-arc" viewBox="0 0 400 400" focusable="false">' +
+            '<circle cx="200" cy="330" r="240" fill="none" stroke="currentColor" stroke-width="2"/>' +
+            '<circle cx="200" cy="330" r="150" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="6 10"/>' +
+            '<path d="M-40 330h480" stroke="currentColor" stroke-width="1.4"/>' +
+          '</svg>' +
+          '<span class="hero-ball">' + ui.icon('basketball') + '</span>' +
+        '</div>' +
+        '<div class="hero-copy">' +
+          '<div class="hero-topline">' +
+            (liveGame ? '<span class="strip-live"><span class="live-dot" aria-hidden="true"></span>LIVE</span>'
+              : '<span class="hero-badge">' + ui.esc(final ? 'FINAL' : ui.fmtDate(game.date)) + '</span>') +
+            '<span class="hero-sep" aria-hidden="true">·</span>' +
+            '<span class="hero-meta">' + ui.esc(ui.fmtDate(game.date)) +
+              (game.time ? ' · ' + ui.esc(ui.fmtTime(game.time)) : '') +
+              (game.location ? ' · ' + ui.esc(game.location) : '') + '</span>' +
+          '</div>' +
+          '<div class="hero-score">' +
+            heroScoreTeam(away, game.awayScore, final && !homeWon) +
+            '<span class="hero-score-dash" aria-hidden="true">–</span>' +
+            heroScoreTeam(home, game.homeScore, final && homeWon) +
+          '</div>' +
+          '<h2 class="hero-title">' + ui.esc(title) + '</h2>' +
+          (topPerformers ? '<div class="hero-performers">' + topPerformers + '</div>' : '') +
+          '<div class="hero-actions">' +
+            (liveGame
+              ? '<button type="button" class="btn hero-btn-primary" data-action="hero-live" data-id="' + ui.esc(game.id) + '">' +
+                ui.icon('play') + ' WATCH</button>'
+              : '<button type="button" class="btn hero-btn-primary" data-action="hero-box" data-id="' + ui.esc(game.id) + '">' +
+                ui.icon('play') + ' WATCH</button>') +
+            '<button type="button" class="btn hero-btn-ghost" data-action="hero-box" data-id="' + ui.esc(game.id) + '">BOX SCORE</button>' +
+          '</div>' +
+          (related.length
+            ? '<div class="hero-related"><h4>RELATED CONTENT</h4>' +
+                related.map(line => '<button type="button" class="hero-related-item" data-action="hero-box" data-id="' +
+                  ui.esc(game.id) + '">' + ui.icon('play') + '<span>' + ui.esc(line) + '</span></button>').join('') +
+              '</div>'
+            : '') +
+        '</div>' +
+      '</div>' +
+    '</article>';
+  }
+
+  /* ------------------------------- headlines ------------------------------- */
+
+  /* A live editorial feed generated from the league itself — no network. */
+  function headlineItems(state) {
+    const items = [];
+    const finals = st.sortByDateDesc(state.games.filter(g => g.status === 'final'));
+
+    finals.slice(0, 4).forEach(g => {
+      const home = teamOf(state, g.homeTeamId);
+      const away = teamOf(state, g.awayTeamId);
+      if (!home || !away) return;
+      const winner = Number(g.homeScore) >= Number(g.awayScore) ? home : away;
+      const loser = winner.id === home.id ? away : home;
+      const winScore = winner.id === home.id ? g.homeScore : g.awayScore;
+      const loseScore = winner.id === home.id ? g.awayScore : g.homeScore;
+      const top = (g.stats || []).slice().sort((a, b) => b.pts - a.pts)[0];
+      const player = top ? state.players.find(p => p.id === top.playerId) : null;
+      items.push({
+        tag: 'Recap',
+        text: player
+          ? player.name + ' drops ' + ui.fmtInt(top.pts) + ' as ' + winner.name + ' beat ' + loser.name +
+            ' ' + ui.fmtInt(winScore) + '–' + ui.fmtInt(loseScore)
+          : winner.name + ' hold off ' + loser.name + ' ' + ui.fmtInt(winScore) + '–' + ui.fmtInt(loseScore),
+        gameId: g.id
+      });
+    });
+
+    const table = st.standings(state.teams, state.games);
+    if (table && table.length) {
+      const leader = table[0];
+      if (leader.team) {
+        items.push({
+          tag: 'Standings',
+          text: leader.team.name + ' lead the table at ' + leader.w + '–' + leader.l +
+            ' (' + ui.fmt1(leader.pct * 100) + '% win rate)',
+          target: 'standings'
+        });
+      }
+      const streak = table.slice().sort((a, b) => Math.abs(b.streak) - Math.abs(a.streak))[0];
+      if (streak && streak.team && Math.abs(streak.streak) > 1) {
+        items.push({
+          tag: 'Form',
+          text: streak.team.name + ' ride a ' + Math.abs(streak.streak) + '-game ' +
+            (streak.streak > 0 ? 'winning' : 'losing') + ' streak',
+          target: 'standings'
+        });
+      }
+    }
+
+    const board = st.leaderboard(state.players, state.games);
+    const scorer = board.ppg && board.ppg[0];
+    if (scorer && scorer.value > 0) {
+      items.push({
+        tag: 'Scoring',
+        text: scorer.player.name + ' tops the league at ' + ui.fmt1(scorer.value) + ' points per game',
+        target: 'stats'
+      });
+    }
+    const rebounder = board.rpg && board.rpg[0];
+    if (rebounder && rebounder.value > 0) {
+      items.push({
+        tag: 'Boards',
+        text: rebounder.player.name + ' leads the glass with ' + ui.fmt1(rebounder.value) + ' rebounds a night',
+        target: 'stats'
+      });
+    }
+
+    const today = TBS.storage.todayISO();
+    const next = state.games.filter(g => g.status === 'scheduled' && (g.date || '') >= today)
+      .sort((a, b) => String(a.date + a.time).localeCompare(String(b.date + b.time)))[0];
+    if (next) {
+      const home = teamOf(state, next.homeTeamId);
+      const away = teamOf(state, next.awayTeamId);
+      items.push({
+        tag: 'Up next',
+        text: (away ? away.name : 'TBD') + ' at ' + (home ? home.name : 'TBD') + ' on ' + ui.fmtDate(next.date) +
+          (next.time ? ', ' + ui.fmtTime(next.time) : ''),
+        gameId: next.id
+      });
+    }
+
+    return items.slice(0, 8);
+  }
+
+  function headlinesHtml(state) {
+    const items = headlineItems(state);
+    if (!items.length) {
+      return '<div class="headlines-head"><h2>HEADLINES</h2></div>' +
+        '<p class="muted small headlines-empty">Finalize a game and the league writes its own headlines here.</p>';
+    }
+    return '<div class="headlines-head"><h2>HEADLINES</h2>' +
+        '<button type="button" class="headlines-more" data-action="go-standings">See more</button></div>' +
+      '<ol class="headlines-list">' +
+        items.map(item =>
+          '<li><button type="button" class="headline" data-action="' +
+            (item.gameId ? 'headline-game' : 'headline-tab') + '"' +
+            (item.gameId ? ' data-id="' + ui.esc(item.gameId) + '"' : '') +
+            (item.target ? ' data-target="' + ui.esc(item.target) + '"' : '') + '>' +
+            '<span class="headline-tag">' + ui.esc(item.tag) + '</span>' +
+            '<span class="headline-text">' + ui.esc(item.text) + '</span>' +
+          '</button></li>').join('') +
+      '</ol>' +
+      '<div class="headlines-promo">' +
+        '<span class="headlines-promo-icon" aria-hidden="true">' + ui.icon('trophy') + '</span>' +
+        '<div><strong>' + ui.esc(state.league.name) + ' Cup</strong>' +
+        '<small>Season ' + ui.esc(state.league.season || '—') + ' · live scores, box scores and standings</small></div>' +
+      '</div>';
+  }
+
   function render(state) {
     const primaryId = state.league.primaryTeamId;
     const rec = st.teamRecord(state.games, primaryId);
@@ -117,8 +357,15 @@
     const scheduled = state.games.filter(g => g.status === 'scheduled');
     const liveGames = state.games.filter(g => g.status === 'live');
 
+    const who = TBS.auth && TBS.auth.isSignedIn() ? TBS.auth.displayName(state) : '';
     qs('#dashboard-season').textContent =
-      state.league.name + ' · Season ' + (state.league.season || '—');
+      state.league.name + ' · Season ' + (state.league.season || '—') +
+      (who ? ' · signed in as ' + who : '');
+    const kicker = qs('#dashboard-kicker');
+    if (kicker) {
+      kicker.textContent = TBS.auth && TBS.auth.role() === 'team'
+        ? 'MY CLUB · TEAM ACCOUNT' : 'LEAGUE OVERVIEW · LEAGUE MANAGEMENT';
+    }
 
     /* Live banner */
     const liveHost = qs('#dashboard-live');
@@ -137,6 +384,12 @@
     } else {
       liveHost.innerHTML = '';
     }
+
+    /* Featured game + editorial feed (broadcast-style hero block). */
+    const heroHost = qs('#dashboard-hero');
+    if (heroHost) heroHost.innerHTML = heroHtml(state);
+    const newsHost = qs('#dashboard-headlines');
+    if (newsHost) newsHost.innerHTML = headlinesHtml(state);
 
     /* KPI cards */
     const pctText = rec.gp ? (rec.pct * 100).toFixed(1) + '% win rate' : 'No final games yet';
@@ -220,7 +473,18 @@
       else if (action === 'go-stats') TBS.app.go('stats');
       else if (action === 'go-standings') TBS.app.go('standings');
       else if (action === 'go-boxscores') TBS.app.go('boxscores');
-      else if (action === 'recap-box') {
+      else if (action === 'hero-box') {
+        if (btn.dataset.id) TBS.boxscores.openGame(btn.dataset.id);
+        TBS.app.go('boxscores');
+      } else if (action === 'hero-live') {
+        if (btn.dataset.id) TBS.live.openGame(btn.dataset.id);
+        TBS.app.go('live');
+      } else if (action === 'headline-game') {
+        if (btn.dataset.id) TBS.boxscores.openGame(btn.dataset.id);
+        TBS.app.go('boxscores');
+      } else if (action === 'headline-tab') {
+        TBS.app.go(btn.dataset.target || 'standings');
+      } else if (action === 'recap-box') {
         if (btn.dataset.id) TBS.boxscores.openGame(btn.dataset.id);
         TBS.app.go('boxscores');
       } else if (action === 'go-live') {

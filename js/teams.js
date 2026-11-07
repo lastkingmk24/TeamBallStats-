@@ -69,10 +69,49 @@
     }
   }
 
+  function auth() { return TBS.auth; }
+  function myTeamId() {
+    const a = auth();
+    return a && a.role() === 'team' ? a.myTeamId() : '';
+  }
+  /* Team accounts only ever see their own club in roster pickers. */
+  function manageableTeams(state) {
+    const mine = myTeamId();
+    return mine ? state.teams.filter(t => t.id === mine) : state.teams;
+  }
+
+  function renderScope(state) {
+    const host = qs('#teams-scope');
+    const forms = qs('#teams-forms');
+    const a = auth();
+    const admin = !a || a.canManageLeague();
+    if (forms) {
+      const teamForm = qs('#team-form');
+      if (teamForm) teamForm.hidden = !admin;
+      forms.classList.toggle('single', !admin);
+    }
+    if (!host) return;
+    if (!a || !a.isSignedIn()) { host.innerHTML = ''; return; }
+    if (admin) {
+      host.innerHTML = '<p class="scope-note-text"><strong>League management</strong> — you can add clubs, ' +
+        'edit every roster and move a player between teams.</p>';
+    } else {
+      const team = teamOf(state, myTeamId());
+      host.innerHTML = '<p class="scope-note-text">' + ui.teamLogo(team, 'sm') +
+        '<span><strong>' + ui.esc(team ? team.name : 'Your team') + '</strong> — team account. ' +
+        'You can manage this roster only; other clubs are read-only.</span></p>';
+    }
+  }
+
   function render(state) {
     const primaryId = state.league.primaryTeamId;
 
-    preserveSelect('#player-team', prev => ui.teamOptions(state.teams, prev || primaryId));
+    renderScope(state);
+    preserveSelect('#player-team', prev => {
+      const teams = manageableTeams(state);
+      const fallback = myTeamId() || prev || primaryId;
+      return ui.teamOptions(teams, teams.some(t => t.id === fallback) ? fallback : (teams[0] || {}).id);
+    });
     preserveSelect('#roster-team-filter', () =>
       '<option value="all">All teams</option>' + ui.teamOptions(state.teams, rosterFilter));
     const filter = qs('#roster-team-filter');
@@ -106,9 +145,12 @@
       { label: 'Players', key: 'players', align: 'right' },
       { label: 'Games', key: 'games', align: 'right' },
       { label: 'Record', key: 'record', align: 'right' },
-      { label: 'Actions', align: 'right', sortable: false, render: r =>
-          '<button type="button" class="btn btn-mini" data-action="edit-team" data-id="' + ui.esc(r.t.id) + '">Edit</button> ' +
-          (r.t.primary ? '' : '<button type="button" class="btn btn-mini" data-action="delete-team" data-id="' + ui.esc(r.t.id) + '">Delete</button>') }
+      { label: 'Actions', align: 'right', sortable: false, render: r => {
+          const admin = !auth() || auth().canManageLeague();
+          if (!admin) return '<span class="muted small">' + (myTeamId() === r.t.id ? 'Your club' : 'Read-only') + '</span>';
+          return '<button type="button" class="btn btn-mini" data-action="edit-team" data-id="' + ui.esc(r.t.id) + '">Edit</button> ' +
+            (r.t.primary ? '' : '<button type="button" class="btn btn-mini" data-action="delete-team" data-id="' + ui.esc(r.t.id) + '">Delete</button>');
+        } }
     ], teamRows, {
       empty: 'No teams yet. Add one above.',
       rowClass: r => r.t.id === primaryId ? 'row-primary' : ''
@@ -153,17 +195,21 @@
             render: row => ui.fmt1(row.agg.apg) },
           { label: 'FG%', key: 'fg', sortValue: row => row.agg.fgPct === null ? -1 : row.agg.fgPct,
             align: 'right', render: row => ui.fmtPct(row.agg.fgPct) },
-          { label: 'Actions', sortable: false, align: 'right', render: row =>
-              '<div class="row-actions">' +
-              '<button type="button" class="btn btn-mini" data-action="edit-player" data-id="' +
-                ui.esc(row.p.id) + '">Edit</button>' +
+          { label: 'Actions', sortable: false, align: 'right', render: row => {
+              const editable = !auth() ? true : auth().canEditPlayer(row.p);
+              return '<div class="row-actions">' +
               '<button type="button" class="btn btn-mini" data-profile="' + ui.esc(row.p.id) +
                 '">Profile</button>' +
-              '<button type="button" class="btn btn-mini" data-action="toggle-player" data-id="' +
-                ui.esc(row.p.id) + '">' + (row.p.active === false ? 'Activate' : 'Deactivate') + '</button>' +
-              '<button type="button" class="btn btn-mini" data-action="delete-player" data-id="' +
-                ui.esc(row.p.id) + '">Remove</button>' +
-              '</div>' }
+              (editable
+                ? '<button type="button" class="btn btn-mini" data-action="edit-player" data-id="' +
+                    ui.esc(row.p.id) + '">Edit</button>' +
+                  '<button type="button" class="btn btn-mini" data-action="toggle-player" data-id="' +
+                    ui.esc(row.p.id) + '">' + (row.p.active === false ? 'Activate' : 'Deactivate') + '</button>' +
+                  '<button type="button" class="btn btn-mini" data-action="delete-player" data-id="' +
+                    ui.esc(row.p.id) + '">Remove</button>'
+                : '<span class="muted small">Read-only</span>') +
+              '</div>';
+            } }
         ]
       });
   }
@@ -202,6 +248,10 @@
   function deleteTeam(state, id) {
     const team = teamOf(state, id);
     if (!team || team.primary) return;
+    if (auth() && !auth().canDeleteTeam()) {
+      ui.toast('Only league management can remove a club.', 'error');
+      return;
+    }
     const hasGames = state.games.some(g => g.homeTeamId === id || g.awayTeamId === id);
     const hasPlayers = state.players.some(p => p.teamId === id);
     if (hasGames || hasPlayers) {
@@ -409,7 +459,8 @@
       const name = qs('#player-name').value.trim();
       const number = storage.num(qs('#player-number').value, 0);
       const position = qs('#player-position').value;
-      const teamId = qs('#player-team').value;
+      let teamId = qs('#player-team').value;
+      if (auth() && !auth().canManageLeague()) teamId = auth().myTeamId();
       if (!name || !teamId) return;
       const state = TBS.app.getState();
       if (state.players.some(p => p.teamId === teamId && Number(p.number) === number)) {
@@ -458,9 +509,19 @@
       if (!btn) return;
       const state = TBS.app.getState();
       const id = btn.dataset.id;
-      if (btn.dataset.action === 'edit-player') openEditPlayer(id);
+      if (btn.dataset.action === 'edit-player') {
+        if (auth() && !auth().canEditPlayer(state.players.find(p => p.id === id))) {
+          ui.toast('You can only edit players on your own team.', 'error');
+          return;
+        }
+        openEditPlayer(id);
+      }
       else if (btn.dataset.action === 'delete-player') deletePlayer(state, id);
       else if (btn.dataset.action === 'toggle-player') {
+        if (auth() && !auth().canEditPlayer(state.players.find(p => p.id === id))) {
+          ui.toast('You can only manage players on your own team.', 'error');
+          return;
+        }
         TBS.app.commit(d => {
           const p = d.players.find(x => x.id === id);
           if (p) p.active = p.active === false;
