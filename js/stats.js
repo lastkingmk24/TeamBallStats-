@@ -6,7 +6,7 @@
 (function (TBS) {
   'use strict';
 
-  const FIELDS = ['pts', 'reb', 'ast', 'stl', 'blk', 'tov',
+  const FIELDS = ['pts', 'reb', 'oreb', 'dreb', 'ast', 'stl', 'blk', 'tov',
     'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta', 'pf', 'min'];
 
   const isFinal = g => !!g && g.status === 'final';
@@ -190,11 +190,26 @@
   }
 
   /* Two-team box score with player rows, team totals and quarter breakdown. */
+  /* Team-level aggregate line(s) (e.g. opponent totals with no roster). They
+   * count toward team totals but never appear as a player row. */
+  function isAggregateLine(line) {
+    return !!line && (line.aggregate === true || !String(line.playerId || ''));
+  }
+
+  function aggregateOf(lines) {
+    const out = {};
+    FIELDS.forEach(f => { out[f] = 0; });
+    (lines || []).forEach(line => { FIELDS.forEach(f => { out[f] += num(line[f]); }); });
+    return out;
+  }
+
   function gameBox(game, players, teams, league) {
     function side(teamId, score) {
       const team = (teams || []).find(t => t.id === teamId) ||
         { id: teamId, name: 'Unknown Team', short: 'UNK', color: '' };
-      const rows = (game.stats || []).filter(s => s.teamId === teamId).map(line => {
+      const teamLines = (game.stats || []).filter(s => s.teamId === teamId);
+      const aggregateLines = teamLines.filter(isAggregateLine);
+      const rows = teamLines.filter(l => !isAggregateLine(l)).map(line => {
         const player = (players || []).find(p => p.id === line.playerId);
         const stats = {};
         FIELDS.forEach(f => { stats[f] = num(line[f]); });
@@ -208,11 +223,12 @@
         (Number(a.player.number) || 999) - (Number(b.player.number) || 999) ||
         String(a.player.name).localeCompare(String(b.player.name))
       );
-      const totals = sumLines((game.stats || []).filter(s => s.teamId === teamId));
+      const totals = sumLines(teamLines);
       return {
         team: team,
         score: num(score),
         rows: rows,
+        aggregate: aggregateLines.length ? aggregateOf(aggregateLines) : null,
         totals: totals,
         computedScore: totals.pts
       };
@@ -267,7 +283,7 @@
       'Player', '#', 'Position', 'Team', 'GP', 'MIN', 'PTS', 'PPG', 'REB', 'RPG',
       'AST', 'APG', 'STL', 'SPG', 'BLK', 'BPG', 'TOV',
       'FGM', 'FGA', 'FG%', '3PM', '3PA', '3P%', 'FTM', 'FTA', 'FT%',
-      'eFG%', 'TS%', 'PF'
+      'eFG%', 'TS%', 'PF', 'OREB', 'DREB'
     ];
     const round1 = v => (Math.round(v * 10) / 10).toFixed(1);
     const pctCell = v => (v === null || v === undefined ? '' : round1(v));
@@ -282,7 +298,8 @@
         a.totals.tov, a.totals.fgm, a.totals.fga, pctCell(a.fgPct),
         a.totals.tpm, a.totals.tpa, pctCell(a.tpPct),
         a.totals.ftm, a.totals.fta, pctCell(a.ftPct),
-        pctCell(a.efgPct), pctCell(a.tsPct), a.totals.pf
+        pctCell(a.efgPct), pctCell(a.tsPct), a.totals.pf,
+        a.totals.oreb, a.totals.dreb
       ];
     });
     return [header, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
@@ -307,6 +324,7 @@
 
   TBS.stats = {
     FIELDS: FIELDS,
+    isAggregateLine: isAggregateLine,
     sumLines: sumLines,
     pct: pct,
     avg: avg,

@@ -202,14 +202,14 @@ check('preserves players, jersey numbers, positions and adds photo=""', () => {
   assert.strictEqual(data.players[0].photo, '');
 });
 
-check('preserves games, scores and expands stat lines to 14 fields', () => {
+check('preserves games, scores and expands stat lines to 16 fields', () => {
   assert.strictEqual(data.games.length, 2);
   assert.strictEqual(data.games[0].homeScore, 68);
   assert.strictEqual(data.games[0].awayScore, 61);
   assert.strictEqual(data.games[0].status, 'final');
   assert.strictEqual(data.games[0].stats[0].pts, 22);
   assert.strictEqual(data.games[0].stats[0].tpa, 0);
-  assert.strictEqual(Object.keys(data.games[0].stats[0]).length, 16); // playerId + teamId + 14 stats
+  assert.strictEqual(Object.keys(data.games[0].stats[0]).length, 18); // playerId + teamId + 16 stats (incl. oreb/dreb)
 });
 
 check('adds safe v3 defaults: lineup, empty events, empty season', () => {

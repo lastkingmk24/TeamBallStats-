@@ -15,7 +15,7 @@
   let editMode = false;
   let draft = null;
 
-  const EDIT_FIELDS = ['min', 'pts', 'reb', 'ast', 'stl', 'blk', 'tov',
+  const EDIT_FIELDS = ['min', 'pts', 'reb', 'oreb', 'dreb', 'ast', 'stl', 'blk', 'tov',
     'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta', 'pf'];
 
   function teamOf(state, id) {
@@ -66,12 +66,16 @@
   function sideTable(side, state, game) {
     const pm = an.plusMinus(game).byPlayer;
     const columns = [
-      { label: 'Player', render: r => ui.playerCell(r.player, {
-          team: teamOf(state, r.player.teamId), size: 'md', showNumber: false,
-          sub: r.player.position || '' }) },
+      { label: 'Player', render: r => r.isAggregate
+          ? '<em>Team totals <span class="muted small">(no roster)</span></em>'
+          : ui.playerCell(r.player, {
+            team: teamOf(state, r.player.teamId), size: 'md', showNumber: false,
+            sub: r.player.position || '' }) },
       { label: 'MIN', render: r => ui.fmtInt(r.stats.min), align: 'right' },
       { label: 'PTS', render: r => '<strong>' + ui.fmtInt(r.stats.pts) + '</strong>', align: 'right' },
-      { label: 'REB', render: r => ui.fmtInt(r.stats.reb), align: 'right' },
+      { label: 'REB', render: r => ui.fmtInt(r.stats.reb) +
+          (r.stats.oreb || r.stats.dreb ? ' <span class="muted small">(' + ui.fmtInt(r.stats.oreb) + ' off·' +
+            ui.fmtInt(r.stats.dreb) + ' def)</span>' : ''), align: 'right' },
       { label: 'AST', render: r => ui.fmtInt(r.stats.ast), align: 'right' },
       { label: 'STL', render: r => ui.fmtInt(r.stats.stl), align: 'right' },
       { label: 'BLK', render: r => ui.fmtInt(r.stats.blk), align: 'right' },
@@ -99,7 +103,9 @@
       '<h3><span class="team-dot" style="--team-color:' + ui.esc(team.color || '#94a3b8') + '"></span>' +
         ui.esc(team.name) + '</h3>' +
       '<span class="score-tag">' + ui.fmtInt(side.score) + '</span></div>' +
-      ui.table(columns, side.rows, {
+      ui.table(columns, side.rows.concat(side.aggregate ? [{
+          isAggregate: true, stats: side.aggregate, playerId: ''
+        }] : []), {
         empty: 'No player lines for this team. Use “Edit box score” to add them.',
         foot: foot,
         caption: 'FG ' + ui.fmtPct(st.pct(t.fgm, t.fga)) + ' · 3PT ' +
@@ -133,9 +139,11 @@
     const lines = draft.stats.filter(s => s.teamId === teamId);
     const players = state.players.filter(p => p.teamId === teamId);
     const nameOf = id => {
+      if (!id) return 'Team totals (no roster)';
       const p = players.find(x => x.id === id);
       return p ? '#' + p.number + ' ' + p.name : 'Former player';
     };
+    const hasAggregate = lines.some(l => !l.playerId);
     const head = '<thead><tr><th>Player</th>' +
       EDIT_FIELDS.map(f => '<th class="align-right">' + f.toUpperCase() + '</th>').join('') +
       '<th></th></tr></thead>';
@@ -155,7 +163,9 @@
         .map(p => ({ value: p.id, label: '#' + p.number + ' ' + p.name })), '', '— add player —') +
       '</select>' +
       '<button type="button" class="btn btn-mini" data-action="add-line" data-team-id="' +
-      ui.esc(teamId) + '">Add line</button></div>';
+      ui.esc(teamId) + '">Add line</button>' +
+      (hasAggregate ? '' : ' <button type="button" class="btn btn-mini" data-action="add-aggregate" data-team-id="' +
+        ui.esc(teamId) + '">Add team totals (no roster)</button>') + '</div>';
 
     return '<div class="box-section-title"><h3>' + ui.esc(title) + '</h3></div>' +
       '<div class="box-editor"><div class="table-scroll"><table class="data-table">' +
@@ -240,7 +250,7 @@
     const box = st.gameBox(game, state.players, state.teams, state.league);
     const resultText = game.status === 'final'
       ? (box.result === 'T' ? 'Tie' : (box.home.score > box.away.score ? box.home.team.name : box.away.team.name) + ' won')
-      : (game.status === 'live' ? 'In progress' : 'Not started');
+      : (game.status === 'live' ? (game.halftime ? 'Halftime' : 'In progress') : 'Not started');
     const shots = an.shotZones(game);
     const flow = an.gameFlow(game);
 
@@ -343,7 +353,14 @@
       if (action === 'go-schedule') { TBS.app.go('schedule'); return; }
       if (!game) return;
 
-      if (action === 'add-line') {
+      if (action === 'add-aggregate') {
+        if (!draft) draft = makeDraft(game);
+        const teamId = btn.dataset.teamId;
+        if (!draft.stats.some(s => s.teamId === teamId && !s.playerId)) {
+          draft.stats.push(storage.blankAggregate(teamId));
+        }
+        render(state);
+      } else if (action === 'add-line') {
         if (!draft) draft = makeDraft(game);
         const teamId = btn.dataset.teamId;
         const sel = ui.qsa('[data-add-select]', host)
@@ -372,7 +389,7 @@
           const g = d.games.find(x => x.id === game.id);
           if (!g) return;
           g.stats = payload.stats.map(s => {
-            const line = storage.blankStats(s.playerId, s.teamId);
+            const line = !s.playerId ? storage.blankAggregate(s.teamId) : storage.blankStats(s.playerId, s.teamId);
             EDIT_FIELDS.forEach(f => { line[f] = Math.max(0, storage.num(s[f], 0)); });
             return line;
           });

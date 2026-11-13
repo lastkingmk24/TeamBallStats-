@@ -27,6 +27,9 @@
  * event    = { id, type, label, teamId, playerId, statDeltas, scoreDelta,
  *              shot: {x,y}|null, quarter, clockSeconds, ts }
  * status   = 'scheduled' | 'live' | 'final'
+ *             (halftime is a flag on a live game: games[].halftime)
+ * stats[]   player lines { playerId, teamId, ...STAT_FIELDS } and opponent
+ *           aggregate lines { playerId: '', teamId, aggregate: true, ...STAT_FIELDS }
  * theme    = 'system' | 'dark' | 'light'
  *
  * Every normalizer copies unknown keys from the source object, so documents
@@ -42,8 +45,10 @@
   const STATUSES = ['scheduled', 'live', 'final'];
   const EVENT_TYPES = ['game', 'practice', 'other'];
   const THEMES = ['system', 'dark', 'light'];
+  /* oreb / dreb are additive (v3 data without them defaults to 0); reb stays
+   * the total rebound count so every historical total is unchanged. */
   const STAT_FIELDS = [
-    'pts', 'reb', 'ast', 'stl', 'blk', 'tov',
+    'pts', 'reb', 'oreb', 'dreb', 'ast', 'stl', 'blk', 'tov',
     'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta', 'pf', 'min'
   ];
   const PLAYER_POSITIONS = ['PG', 'SG', 'SF', 'PF', 'C'];
@@ -94,6 +99,14 @@
   function blankStats(playerId, teamId) {
     const line = { playerId: playerId, teamId: teamId };
     STAT_FIELDS.forEach(f => { line[f] = 0; });
+    return line;
+  }
+
+  /* Opponent (or any team) aggregate line: no roster player, team totals only.
+   * Stored in game.stats with an empty playerId and aggregate: true. */
+  function blankAggregate(teamId) {
+    const line = blankStats('', teamId);
+    line.aggregate = true;
     return line;
   }
 
@@ -265,8 +278,17 @@
       awayTeamId = ensureTeamById(ctx.teams, uid('team'), 'Opponent').id;
     }
 
-    const stats = records(g.stats).filter(rawLine => str(rawLine.playerId, '')).map(s => {
+    /* Player lines need a playerId. Aggregate lines (aggregate: true) belong to
+     * one of the two teams and carry team totals with no player. */
+    const isKeptLine = rawLine => !!str(rawLine.playerId, '') ||
+      (rawLine.aggregate === true && (str(rawLine.teamId, '') === homeTeamId || str(rawLine.teamId, '') === awayTeamId));
+    const stats = records(g.stats).filter(isKeptLine).map(s => {
       const playerId = str(s.playerId, '');
+      if (!playerId) {
+        const agg = blankAggregate(str(s.teamId, homeTeamId));
+        STAT_FIELDS.forEach(f => { agg[f] = Math.max(0, num(s[f], 0)); });
+        return keepExtras(s, agg);
+      }
       const player = ctx.players.find(p => p.id === playerId);
       const line = blankStats(playerId, str(s.teamId, player ? player.teamId : homeTeamId));
       STAT_FIELDS.forEach(f => { line[f] = Math.max(0, num(s[f], 0)); });
@@ -294,6 +316,7 @@
       location: str(g.location, ''),
       season: str(g.season, ''),
       status: status,
+      halftime: status === 'live' ? bool(g.halftime, false) : false,
       homeTeamId: homeTeamId,
       awayTeamId: awayTeamId,
       homeScore: homeScore,
@@ -734,6 +757,7 @@
     bool: bool,
     todayISO: todayISO,
     blankStats: blankStats,
+    blankAggregate: blankAggregate,
     blankLineup: blankLineup,
     defaultData: defaultData,
     normalizePhoto: normalizePhoto,

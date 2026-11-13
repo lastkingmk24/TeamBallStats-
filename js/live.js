@@ -1,11 +1,17 @@
 /* =========================================================================
  * live.js — live scoring console.
  *
- * Clock + quarters, one-tap stats, manual score adjustments, shot locations,
- * on-court lineup tracking, play-by-play filters, exact undo, live box score
- * and finalization. Every tap is persisted immediately through TBS.app.commit,
- * and keyboard shortcuts are routed via the small API at the bottom of this
- * module (see js/shortcuts.js for the key map).
+ * Two entry modes (device preference, bball_tm_entry_v1):
+ *   • Two-tap (default): TAP 1 pick a stat (+1/+2/+3, misses, rebounds,
+ *     assists, steals, blocks, turnovers, fouls), TAP 2 pick the jersey
+ *     number. The play is recorded instantly. Opponent entries are team
+ *     aggregates, so only one target is shown for them.
+ *   • Classic: player first, then the stat (the original flow).
+ *
+ * Clock + quarters, halftime, team fouls, manual score corrections, shot
+ * spots, on-court lineup, play-by-play filters, exact undo and finalize.
+ * Every change goes through TBS.plays (js/plays.js) and is persisted with
+ * TBS.app.commit, so classic, two-tap and shortcuts behave identically.
  * ========================================================================= */
 (function (TBS) {
   'use strict';
@@ -13,34 +19,40 @@
   const ui = TBS.ui;
   const st = TBS.stats;
   const an = TBS.analytics;
+  const pl = TBS.plays;
   const storage = TBS.storage;
   const qs = ui.qs;
+
+  const MODE_KEY = 'bball_tm_entry_v1';
 
   let selectedGameId = null;
   let selectedTeamId = null;
   let selectedPlayerId = null;
   let pendingShot = null;
+  let pendingStat = null;   /* two-tap: the stat waiting for a jersey tap */
+  let lastRecorded = '';    /* two-tap: confirmation line for screen readers */
   let pbpFilter = 'all';
   let pbpLimit = '25';
   let timer = null;
 
-  /* Play definitions: statDeltas are also used to undo a play exactly. */
-  const PLAYS = {
-    ft_make:  { label: 'FT made',    stats: { ftm: 1, fta: 1, pts: 1 }, score: 1, needsPlayer: true, group: 'scoring' },
-    fg2_make: { label: '2PT made',   stats: { fgm: 1, fga: 1, pts: 2 }, score: 2, needsPlayer: true, group: 'scoring' },
-    fg3_make: { label: '3PT made',   stats: { fgm: 1, fga: 1, tpm: 1, tpa: 1, pts: 3 }, score: 3, needsPlayer: true, group: 'scoring' },
-    ft_miss:  { label: 'FT missed',  stats: { fta: 1 }, score: 0, needsPlayer: true, group: 'misses' },
-    fg2_miss: { label: '2PT missed', stats: { fga: 1 }, score: 0, needsPlayer: true, group: 'misses' },
-    fg3_miss: { label: '3PT missed', stats: { fga: 1, tpa: 1 }, score: 0, needsPlayer: true, group: 'misses' },
-    reb:      { label: 'Rebound',    stats: { reb: 1 }, score: 0, needsPlayer: true, group: 'other' },
-    ast:      { label: 'Assist',     stats: { ast: 1 }, score: 0, needsPlayer: true, group: 'other' },
-    stl:      { label: 'Steal',      stats: { stl: 1 }, score: 0, needsPlayer: true, group: 'other' },
-    blk:      { label: 'Block',      stats: { blk: 1 }, score: 0, needsPlayer: true, group: 'other' },
-    tov:      { label: 'Turnover',   stats: { tov: 1 }, score: 0, needsPlayer: true, group: 'other' },
-    pf:       { label: 'Foul',       stats: { pf: 1 }, score: 0, needsPlayer: true, group: 'other' },
-    min:      { label: 'Minute',     stats: { min: 1 }, score: 0, needsPlayer: true, group: 'other' }
-  };
+  /* Two-tap stat palette (step 1). `key` is a play in TBS.plays.PLAYS. */
+  const TWO_TAP = [
+    { key: 'ft_make', label: '+1', hint: 'FT made', tone: 'score' },
+    { key: 'fg2_make', label: '+2', hint: '2PT made', tone: 'score' },
+    { key: 'fg3_make', label: '+3', hint: '3PT made', tone: 'score' },
+    { key: 'ft_miss', label: 'Miss FT', hint: '', tone: 'miss' },
+    { key: 'fg2_miss', label: 'Miss 2', hint: '', tone: 'miss' },
+    { key: 'fg3_miss', label: 'Miss 3', hint: '', tone: 'miss' },
+    { key: 'oreb', label: 'OREB', hint: 'offensive', tone: 'other' },
+    { key: 'dreb', label: 'DREB', hint: 'defensive', tone: 'other' },
+    { key: 'ast', label: 'AST', hint: 'assist', tone: 'other' },
+    { key: 'stl', label: 'STL', hint: 'steal', tone: 'other' },
+    { key: 'blk', label: 'BLK', hint: 'block', tone: 'other' },
+    { key: 'tov', label: 'TOV', hint: 'turnover', tone: 'other' },
+    { key: 'pf', label: 'FOUL', hint: 'personal', tone: 'other' }
+  ];
 
+  /* Classic stat buttons (player first). */
   const PLAY_BUTTONS = [
     ['ft_make', 'FT', 'FT made'],
     ['fg2_make', '2PT', '2PT made'],
@@ -48,7 +60,8 @@
     ['ft_miss', 'FT miss', 'attempt'],
     ['fg2_miss', '2PT miss', 'attempt'],
     ['fg3_miss', '3PT miss', 'attempt'],
-    ['reb', 'REB', 'rebound'],
+    ['oreb', 'OREB', 'offensive reb'],
+    ['dreb', 'DREB', 'defensive reb'],
     ['ast', 'AST', 'assist'],
     ['stl', 'STL', 'steal'],
     ['blk', 'BLK', 'block'],
@@ -56,8 +69,6 @@
     ['pf', 'PF', 'foul'],
     ['min', 'MIN', 'minute']
   ];
-
-  const SHOT_PLAYS = { ft_make: false, ft_miss: false, fg2_make: true, fg2_miss: true, fg3_make: true, fg3_miss: true };
 
   const PBP_FILTERS = [
     { value: 'all', label: 'All plays' },
@@ -68,6 +79,19 @@
     { value: 'away', label: 'Away team only' }
   ];
 
+  const PHASE_LABEL = { pregame: 'PRE-GAME', live: 'LIVE', halftime: 'HALFTIME', final: 'FINAL' };
+
+  function entryMode() {
+    try {
+      return localStorage.getItem(MODE_KEY) === 'classic' ? 'classic' : 'twotap';
+    } catch (_) { return 'twotap'; }
+  }
+
+  function setEntryMode(mode) {
+    try { localStorage.setItem(MODE_KEY, mode === 'classic' ? 'classic' : 'twotap'); } catch (_) { /* private mode */ }
+    pendingStat = null;
+  }
+
   function teamOf(state, id) {
     return state.teams.find(x => x.id === id) || null;
   }
@@ -75,6 +99,17 @@
   function teamName(state, id) {
     const t = teamOf(state, id);
     return t ? t.name : 'Unknown team';
+  }
+
+  /* The "our team" side: a team account's club, else the league's primary
+   * team when it plays in this game, else the home side. */
+  function ourTeamId(state, game) {
+    if (!game) return null;
+    const mine = TBS.auth && TBS.auth.role && TBS.auth.role() === 'team' ? TBS.auth.myTeamId() : null;
+    if (mine && (mine === game.homeTeamId || mine === game.awayTeamId)) return mine;
+    const primary = state.league.primaryTeamId;
+    if (primary && (primary === game.homeTeamId || primary === game.awayTeamId)) return primary;
+    return game.homeTeamId;
   }
 
   function activeGame(state) {
@@ -86,14 +121,14 @@
       selectedGameId = game ? game.id : null;
     }
     if (game && (!selectedTeamId || (game.homeTeamId !== selectedTeamId && game.awayTeamId !== selectedTeamId))) {
-      selectedTeamId = game.homeTeamId;
+      selectedTeamId = ourTeamId(state, game);
       selectedPlayerId = null;
     }
     return game;
   }
 
   function sideOf(game, teamId) {
-    return teamId === game.homeTeamId ? 'home' : (teamId === game.awayTeamId ? 'away' : null);
+    return pl.sideOf(game, teamId);
   }
 
   function remainingSeconds(game, now) {
@@ -103,14 +138,14 @@
   }
 
   function ensureTimer(state) {
-    const running = (state.games || []).some(g => g.status === 'live' && g.clockRunningSince);
+    const running = (state.games || []).some(g => g.status === 'live' && !g.halftime && g.clockRunningSince);
     if (running && !timer) timer = setInterval(tick, 250);
     if (!running && timer) { clearInterval(timer); timer = null; }
   }
 
   function tick() {
     const state = TBS.app.getState();
-    const game = state.games.find(g => g.status === 'live' && g.clockRunningSince);
+    const game = state.games.find(g => g.status === 'live' && !g.halftime && g.clockRunningSince);
     if (!game) { ensureTimer(state); return; }
     const left = remainingSeconds(game);
     const el = qs('#live-clock');
@@ -129,6 +164,7 @@
     TBS.app.commit(d => {
       const g = d.games.find(x => x.id === gameId);
       if (!g) return;
+      if (g.halftime) { ui.toast('Resume the second half before starting the clock.', 'error'); return; }
       if (g.clockRunningSince) {
         g.clockSeconds = Math.ceil(remainingSeconds(g));
         g.clockRunningSince = null;
@@ -148,6 +184,7 @@
         return;
       }
       g.quarter += 1;
+      g.halftime = false;
       g.clockSeconds = d.league.quarterMinutes * 60;
       g.clockRunningSince = null;
     });
@@ -162,6 +199,33 @@
     });
   }
 
+  /* Halftime pauses the clock and scoring. Resuming starts the next quarter
+   * with a full clock (or stays on the current quarter at the last one). */
+  function startHalftime(gameId) {
+    TBS.app.commit(d => {
+      const g = d.games.find(x => x.id === gameId);
+      if (!g || g.status !== 'live') return;
+      if (g.clockRunningSince) {
+        g.clockSeconds = Math.ceil(remainingSeconds(g));
+        g.clockRunningSince = null;
+      }
+      g.halftime = true;
+    });
+    ui.toast('Halftime. Scoring is paused until you resume.', 'info');
+  }
+
+  function resumeFromHalftime(gameId) {
+    TBS.app.commit(d => {
+      const g = d.games.find(x => x.id === gameId);
+      if (!g || !g.halftime) return;
+      g.halftime = false;
+      if (g.quarter < d.league.quarters) g.quarter += 1;
+      g.clockSeconds = d.league.quarterMinutes * 60;
+      g.clockRunningSince = null;
+    });
+    ui.toast('Back on the floor. Start the clock when play resumes.', 'success');
+  }
+
   function setStatus(gameId, status) {
     TBS.app.commit(d => {
       const g = d.games.find(x => x.id === gameId);
@@ -171,6 +235,7 @@
         g.clockRunningSince = null;
       }
       g.status = status;
+      g.halftime = false;
       if (status === 'final') g.clockSeconds = 0;
       if (status === 'live' && g.quarter < 1) g.quarter = 1;
       if (status === 'scheduled') {
@@ -181,63 +246,48 @@
   }
 
   function manualScore(gameId, teamId, delta) {
+    const state = TBS.app.getState();
     TBS.app.commit(d => {
       const g = d.games.find(x => x.id === gameId);
       if (!g) return;
-      const key = sideOf(g, teamId);
-      if (!key) return;
-      g[key + 'Score'] = Math.max(0, (Number(g[key + 'Score']) || 0) + delta);
-      g.events.push({
-        id: storage.uid('event'), type: 'manual',
-        label: (delta > 0 ? '+' : '') + delta + ' ' + teamName(d, teamId) + ' (manual)',
-        teamId: teamId, playerId: '', statDeltas: {}, scoreDelta: delta,
-        shot: null,
-        quarter: g.quarter, clockSeconds: Math.ceil(remainingSeconds(g)),
-        ts: Date.now()
+      pl.manualScore(g, teamId, delta, {
+        teamName: teamName(state, teamId),
+        clockSeconds: remainingSeconds(g)
       });
     });
   }
 
+  /* One recorded play. playerId '' + opponent team = aggregate entry. */
   function applyPlay(gameId, playKey, teamId, playerId) {
-    const def = PLAYS[playKey];
-    if (!def) return;
-    if (def.needsPlayer && !playerId) {
-      ui.toast('Select a player first — tap a name in the roster strip, or use ↑ / ↓.', 'error');
-      return;
+    const def = pl.PLAYS[playKey];
+    if (!def) return false;
+    const state = TBS.app.getState();
+    const game = state.games.find(g => g.id === gameId);
+    if (!game) return false;
+    const ours = teamId === ourTeamId(state, game);
+    if (!playerId && ours) {
+      ui.toast('Pick a jersey number first — the play needs a player on your team.', 'error');
+      return false;
     }
-    const shot = SHOT_PLAYS[playKey] && pendingShot ? Object.assign({}, pendingShot) : null;
+    const shot = pl.SHOT_PLAYS[playKey] && pendingShot ? Object.assign({}, pendingShot) : null;
+    let label = '';
     TBS.app.commit(d => {
       const g = d.games.find(x => x.id === gameId);
       if (!g) return;
-      let line = g.stats.find(s => s.playerId === playerId);
-      if (!line) {
-        line = storage.blankStats(playerId, teamId);
-        g.stats.push(line);
-      }
-      if (line.teamId !== teamId) line.teamId = teamId;
-      Object.keys(def.stats).forEach(k => {
-        line[k] = Math.max(0, (Number(line[k]) || 0) + def.stats[k]);
-      });
-      if (def.score) {
-        const key = sideOf(g, teamId);
-        if (key) g[key + 'Score'] = Math.max(0, (Number(g[key + 'Score']) || 0) + def.score);
-      }
-      const player = d.players.find(p => p.id === playerId);
-      g.events.push({
-        id: storage.uid('event'), type: playKey,
-        label: (player ? player.name : 'Player') + ' — ' + def.label,
-        teamId: teamId, playerId: playerId,
-        statDeltas: Object.assign({}, def.stats),
-        scoreDelta: def.score || 0,
+      const event = pl.applyPlay(g, {
+        playKey: playKey,
+        teamId: teamId,
+        playerId: playerId,
         shot: shot,
-        quarter: g.quarter, clockSeconds: Math.ceil(remainingSeconds(g)),
-        ts: Date.now()
+        players: d.players,
+        teams: d.teams,
+        clockSeconds: remainingSeconds(g)
       });
+      if (event) label = event.label;
     });
-    if (shot) {
-      pendingShot = null;
-      ui.toast('Shot location logged with the play.', 'info');
-    }
+    if (shot) pendingShot = null;
+    lastRecorded = label;
+    return !!label;
   }
 
   /* Substitute a player in or out; the lineup is stored on the game and the
@@ -256,18 +306,9 @@
     TBS.app.commit(d => {
       const g = d.games.find(x => x.id === gameId);
       if (!g) return;
-      g.lineup = g.lineup || { home: [], away: [] };
-      const ids = g.lineup[side] || [];
-      if (onCourt) g.lineup[side] = ids.filter(id => id !== playerId);
-      else if (ids.indexOf(playerId) < 0) g.lineup[side] = ids.concat(playerId);
-      g.events.push({
-        id: storage.uid('event'),
-        type: onCourt ? 'sub_out' : 'sub_in',
-        label: (onCourt ? 'Sub out — ' : 'Sub in — ') + player.name,
-        teamId: player.teamId, playerId: playerId,
-        statDeltas: {}, scoreDelta: 0, shot: null,
-        quarter: g.quarter, clockSeconds: Math.ceil(remainingSeconds(g)),
-        ts: Date.now()
+      pl.setOnCourt(g, player.teamId, playerId, !onCourt, {
+        player: player,
+        clockSeconds: remainingSeconds(g)
       });
     });
   }
@@ -276,34 +317,13 @@
     const state = TBS.app.getState();
     const game = state.games.find(g => g.id === gameId);
     if (!game || !game.events.length) { ui.toast('Nothing to undo.', 'error'); return; }
-    const last = game.events[game.events.length - 1];
+    let removed = null;
     TBS.app.commit(d => {
       const g = d.games.find(x => x.id === gameId);
-      if (!g || !g.events.length) return;
-      const e = g.events.pop();
-      if (e.playerId && e.statDeltas) {
-        const line = g.stats.find(s => s.playerId === e.playerId);
-        if (line) {
-          Object.keys(e.statDeltas).forEach(k => {
-            line[k] = Math.max(0, (Number(line[k]) || 0) - Number(e.statDeltas[k] || 0));
-          });
-        }
-      }
-      if (e.scoreDelta) {
-        const key = sideOf(g, e.teamId);
-        if (key) g[key + 'Score'] = Math.max(0, (Number(g[key + 'Score']) || 0) - Number(e.scoreDelta));
-      }
-      if (e.type === 'sub_in' || e.type === 'sub_out') {
-        const side = sideOf(g, e.teamId);
-        if (side) {
-          g.lineup = g.lineup || { home: [], away: [] };
-          const ids = g.lineup[side] || [];
-          if (e.type === 'sub_in') g.lineup[side] = ids.filter(id => id !== e.playerId);
-          else if (ids.indexOf(e.playerId) < 0) g.lineup[side] = ids.concat(e.playerId);
-        }
-      }
+      if (!g) return;
+      removed = pl.undoLast(g);
     });
-    ui.toast('Undid: ' + last.label, 'success');
+    if (removed) ui.toast('Undid: ' + removed.label, 'success');
   }
 
   function compactBox(game, state) {
@@ -319,6 +339,14 @@
         '<td class="align-right">' + s.tpm + '/' + s.tpa + '</td><td class="align-right">' + s.ftm + '/' + s.fta + '</td>' +
         '<td class="align-right">' + s.tov + '</td></tr>';
     }
+    function aggRow(a) {
+      return '<tr class="aggregate-row"><td><em>Team totals (no roster)</em></td>' +
+        '<td class="align-right">' + a.pts + '</td><td class="align-right">' + a.reb + '</td>' +
+        '<td class="align-right">' + a.ast + '</td><td class="align-right">' + a.stl + '</td>' +
+        '<td class="align-right">' + a.blk + '</td><td class="align-right">' + a.fgm + '/' + a.fga + '</td>' +
+        '<td class="align-right">' + a.tpm + '/' + a.tpa + '</td><td class="align-right">' + a.ftm + '/' + a.fta + '</td>' +
+        '<td class="align-right">' + a.tov + '</td></tr>';
+    }
     function side(s) {
       const t = s.totals;
       const foot = '<tfoot><tr><td><strong>Totals</strong></td>' +
@@ -327,14 +355,14 @@
         '<td class="align-right">' + t.blk + '</td><td class="align-right">' + t.fgm + '/' + t.fga + '</td>' +
         '<td class="align-right">' + t.tpm + '/' + t.tpa + '</td><td class="align-right">' + t.ftm + '/' + t.fta + '</td>' +
         '<td class="align-right">' + t.tov + '</td></tr></tfoot>';
+      const body = (s.rows.length ? s.rows.map(row).join('') :
+        (s.aggregate ? '' : '<tr><td class="empty-cell" colspan="10">No plays recorded for this team yet.</td></tr>')) +
+        (s.aggregate ? aggRow(s.aggregate) : '');
       return '<div class="box-section-title"><h3>' + ui.esc(s.team.name) + '</h3>' +
         '<span class="score-tag">' + s.score + '</span></div>' +
         '<div class="table-scroll"><table class="data-table"><thead><tr><th>Player</th>' +
         cols.map(c => '<th class="align-right">' + c + '</th>').join('') +
-        '</tr></thead><tbody>' +
-        (s.rows.length ? s.rows.map(row).join('') :
-          '<tr><td class="empty-cell" colspan="10">No plays recorded for this team yet.</td></tr>') +
-        '</tbody>' + foot + '</table></div>';
+        '</tr></thead><tbody>' + body + '</tbody>' + foot + '</table></div>';
     }
     return '<div class="live-box">' + side(box.home) + side(box.away) + '</div>';
   }
@@ -359,7 +387,7 @@
     if (!events.length) {
       return '<p class="muted">' + (game.events.length
         ? 'No plays match this filter.'
-        : 'No plays recorded yet. Tap a stat button to start the log.') + '</p>';
+        : 'No plays recorded yet. Tap a stat to start the log.') + '</p>';
     }
     return events.map(e => {
       const player = e.playerId ? state.players.find(p => p.id === e.playerId) : null;
@@ -401,6 +429,26 @@
     return state.games.filter(g => g.homeTeamId === myId || g.awayTeamId === myId);
   }
 
+  function teamFoulBadge(game, teamId) {
+    const f = pl.teamFoulSummary(game, teamId);
+    return '<div class="team-fouls' + (f.bonus ? ' is-bonus' : '') + '">' +
+      'Team fouls Q' + f.quarter + ': <strong>' + f.inQuarter + '</strong>' +
+      ' · game ' + f.total +
+      (f.bonus ? ' <span class="bonus-pill">BONUS</span>' : '') + '</div>';
+  }
+
+  function phaseLabel(game) {
+    const phase = pl.phaseOf(game);
+    if (phase === 'live') return 'LIVE · Q' + game.quarter;
+    return PHASE_LABEL[phase];
+  }
+
+  function rosterOf(state, teamId) {
+    return state.players
+      .filter(p => p.teamId === teamId && p.active !== false)
+      .sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999));
+  }
+
   function render(state) {
     const select = qs('#live-game-select');
     if (!select) return;
@@ -421,41 +469,85 @@
       return;
     }
 
-    const canScore = game.status === 'live';
-    const running = !!game.clockRunningSince;
+    const phase = pl.phaseOf(game);
+    const canScore = phase === 'live';
+    const running = !!game.clockRunningSince && !game.halftime;
     const left = remainingSeconds(game);
+    const ours = ourTeamId(state, game);
+    const oppId = ours === game.homeTeamId ? game.awayTeamId : game.homeTeamId;
     const homeTeam = teamOf(state, game.homeTeamId);
     const awayTeam = teamOf(state, game.awayTeamId);
     const homeName = homeTeam ? homeTeam.name : 'Unknown team';
     const awayName = awayTeam ? awayTeam.name : 'Unknown team';
+    const selIsOurs = selectedTeamId === ours;
     const side = sideOf(game, selectedTeamId) || 'home';
     const lineup = (game.lineup && game.lineup[side]) || [];
-    const roster = state.players
-      .filter(p => p.teamId === selectedTeamId && p.active !== false)
-      .sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999));
+    const roster = rosterOf(state, selectedTeamId);
     if (selectedPlayerId && !roster.some(p => p.id === selectedPlayerId)) selectedPlayerId = null;
     const lineupMinutes = an.minutesFromLineup(game, state.league);
+    const mode = entryMode();
+    const teamLabel = ui.esc(teamName(state, selectedTeamId));
 
     const scoreCard = (team, teamId, score, label) =>
       '<div class="score-team' + (teamId === selectedTeamId ? ' selected' : '') + '"' +
         (team && team.color ? ' style="--team-color:' + ui.esc(team.color) + '"' : '') +
         ' data-action="select-team" data-team="' + ui.esc(teamId) + '" role="button" tabindex="0">' +
-        '<div class="team-label">' + label + '</div>' +
+        '<div class="team-label">' + label + (teamId === ours ? ' · OUR TEAM' : ' · OPPONENT') + '</div>' +
         '<div class="team-name">' + ui.esc(team ? team.name : 'Unknown team') + '</div>' +
         '<div class="score-value">' + ui.fmtInt(score) + '</div>' +
+        teamFoulBadge(game, teamId) +
         '<div class="score-adjust">' +
           [1, 2, 3, -1].map(d =>
             '<button type="button" class="btn btn-mini" data-action="manual-score" data-team="' +
-            ui.esc(teamId) + '" data-delta="' + d + '">' + (d > 0 ? '+' : '') + d + '</button>').join('') +
+            ui.esc(teamId) + '" data-delta="' + d + '"' + (phase === 'live' ? '' : ' disabled') + '>' +
+            (d > 0 ? '+' : '') + d + '</button>').join('') +
         '</div></div>';
 
-    const playButtons = PLAY_BUTTONS.map(([key, label, hint]) =>
-      '<button type="button" class="stat-btn' + (PLAYS[key].score ? ' score' : '') +
-        '" data-action="play" data-play="' + key + '"' + (canScore ? '' : ' disabled') + '>' +
-        ui.esc(label) + '<small>' + ui.esc(hint) + '</small></button>').join('');
+    /* ---------- two-tap panel ---------- */
+    const targetHtml = (function () {
+      if (!pendingStat) {
+        return '<p class="tt-hint">Step 1 — tap a stat above. Step 2 — tap the jersey number. ' +
+          'It is recorded on the spot.</p>';
+      }
+      const def = pl.PLAYS[pendingStat];
+      const stat = TWO_TAP.find(t => t.key === pendingStat);
+      const head = '<p class="tt-hint tt-armed"><strong>' + ui.esc(stat ? stat.label + ' ' + stat.hint : def.label) +
+        '</strong> for <strong>' + teamLabel + '</strong> — now tap ' +
+        (selIsOurs ? 'a jersey number.' : 'the opponent total.') + '</p>';
+      if (!selIsOurs) {
+        return head + '<button type="button" class="tt-target tt-team-total" data-action="tt-target" ' +
+          'data-id="" aria-label="Record for ' + teamLabel + ' team total">' +
+          '<span class="tt-target-no">TEAM</span><span class="tt-target-name">Team total</span></button>';
+      }
+      if (!roster.length) {
+        return head + '<p class="muted">No active players on your roster — add them in Teams &amp; Roster.</p>';
+      }
+      return head + '<div class="tt-jerseys">' + roster.map(p =>
+        '<button type="button" class="tt-target' + (lineup.indexOf(p.id) >= 0 ? ' on-court' : '') +
+        '" data-action="tt-target" data-id="' + ui.esc(p.id) + '" aria-label="#' + ui.esc(p.number) + ' ' +
+        ui.esc(p.name) + '">' +
+        '<span class="tt-target-no">' + ui.esc(p.number) + '</span>' +
+        '<span class="tt-target-name">' + ui.esc(p.name) + '</span></button>').join('') + '</div>';
+    })();
 
-    const chips = roster.length
-      ? roster.map(p =>
+    const twoTapPanel =
+      '<div class="tt-stats" role="group" aria-label="Step 1: choose a stat">' +
+        TWO_TAP.map(t =>
+          '<button type="button" class="tt-stat tone-' + t.tone + (pendingStat === t.key ? ' is-armed' : '') +
+          '" data-action="tt-stat" data-play="' + t.key + '" aria-pressed="' + (pendingStat === t.key) + '"' +
+          (canScore ? '' : ' disabled') + '>' +
+          '<span class="tt-stat-label">' + ui.esc(t.label) + '</span>' +
+          (t.hint ? '<small>' + ui.esc(t.hint) + '</small>' : '') + '</button>').join('') +
+      '</div>' +
+      '<div class="tt-target-area" aria-live="polite">' + (canScore ? targetHtml :
+        '<p class="tt-hint">' + (phase === 'pregame' ? 'Start the game to enable scoring.' :
+          phase === 'halftime' ? 'Halftime — resume the second half to keep scoring.' :
+          'This game is final. Reopen it to add plays.') + '</p>') + '</div>' +
+      '<p class="tt-last" aria-live="polite">' + (lastRecorded ? 'Last recorded: ' + ui.esc(lastRecorded) : '') + '</p>';
+
+    /* ---------- classic panel ---------- */
+    const chips = selIsOurs
+      ? (roster.length ? roster.map(p =>
           '<button type="button" class="roster-chip' + (p.id === selectedPlayerId ? ' selected' : '') +
             (lineup.indexOf(p.id) >= 0 ? ' on-court' : '') + '" data-action="select-player" data-id="' +
             ui.esc(p.id) + '" title="' + ui.esc(p.name) + (lineup.indexOf(p.id) >= 0 ? ' — on court' : '') + '">' +
@@ -463,7 +555,9 @@
             '<span class="chip-text">#' + ui.esc(p.number) + ' ' + ui.esc(p.name) + '</span>' +
             (lineup.indexOf(p.id) >= 0 ? '<span class="on-court-dot" aria-label="on court"></span>' : '') +
           '</button>').join('')
-      : '<span class="muted">No active players on this team — add them in Teams &amp; Roster.</span>';
+        : '<span class="muted">No active players on this team — add them in Teams &amp; Roster.</span>')
+      : '<button type="button" class="roster-chip team-total-chip' + (!selectedPlayerId ? ' selected' : '') +
+        '" data-action="select-player" data-id=""><span class="chip-text">Team total (opponent)</span></button>';
 
     const lineupButtons = roster.length
       ? roster.map(p =>
@@ -474,10 +568,48 @@
           '</button>').join('')
       : '';
 
+    const playButtons = PLAY_BUTTONS.map(([key, label, hint]) =>
+      '<button type="button" class="stat-btn' + (pl.PLAYS[key].score ? ' score' : '') +
+        '" data-action="play" data-play="' + key + '"' + (canScore ? '' : ' disabled') + '>' +
+        ui.esc(label) + '<small>' + ui.esc(hint) + '</small></button>').join('');
+
+    const classicPanel =
+      '<div class="roster-strip">' + chips + '</div>' +
+      (selIsOurs && roster.length ?
+        '<details class="lineup-panel"><summary>On court (' + lineup.length + '/5) · ' +
+        (lineupMinutes.players ? 'lineup clock tracked' : 'optional lineup tracking') + '</summary>' +
+        '<div class="lineup-toggles">' + lineupButtons + '</div>' +
+        '<p class="footnote">Toggling a player records a substitution and starts/stops their ' +
+        'lineup minutes. Leave it alone to keep the classic stat-line minutes.</p></details>' : '') +
+      '<div class="stat-grid">' + playButtons + '</div>';
+
+    const shotSpot =
+      '<div class="shot-spot-wrap">' +
+        '<h4 class="shot-spot-title">Shot spot <span class="muted small">(optional — attaches to the next shot)</span></h4>' +
+        '<canvas id="shot-spot" class="chart-canvas shot-canvas" role="img" ' +
+          'aria-label="Tap the court to mark where the next shot was taken"></canvas>' +
+        '<div class="shot-spot-bar"><span id="shot-spot-label" class="small muted"></span>' +
+          '<button type="button" class="btn btn-mini" id="shot-clear" data-action="clear-shot">Clear spot</button></div>' +
+      '</div>';
+
+    const statusButtons =
+      (game.status === 'scheduled'
+        ? '<button type="button" class="btn btn-primary" data-action="start-game">Start game</button>' : '') +
+      (phase === 'live'
+        ? '<button type="button" class="btn btn-ghost" data-action="halftime">Halftime</button>' +
+          '<button type="button" class="btn btn-primary" data-action="finalize">Finalize game</button>' : '') +
+      (phase === 'halftime'
+        ? '<button type="button" class="btn btn-primary" data-action="resume">Resume · ' +
+          (game.quarter < state.league.quarters ? 'start Q' + (game.quarter + 1) : 'back on court') + '</button>' +
+          '<button type="button" class="btn btn-primary" data-action="finalize">Finalize game</button>' : '') +
+      (game.status === 'final'
+        ? '<button type="button" class="btn btn-ghost" data-action="reopen">Reopen for edits</button>' : '');
+
     host.innerHTML =
       '<div class="box-header">' +
         '<div class="box-meta">' + ui.statusBadge(game.status) +
-          ' · ' + ui.fmtDate(game.date) + (game.time ? ' ' + ui.fmtTime(game.time) : '') +
+          ' <span class="phase-pill phase-' + phase + '">' + ui.esc(phaseLabel(game)) + '</span> · ' +
+          ui.fmtDate(game.date) + (game.time ? ' ' + ui.fmtTime(game.time) : '') +
           (game.location ? ' · ' + ui.esc(game.location) : '') +
           (game.notes ? ' · ' + ui.esc(game.notes) : '') + '</div>' +
         '<div class="matchup">' +
@@ -486,15 +618,17 @@
           '<span class="side">' + ui.esc(homeName) + '</span>' +
         '</div>' +
         '<div class="box-meta">Home score shown first · ' +
-          (game.status === 'final' ? 'Final — reopen to keep editing' :
-            game.status === 'scheduled' ? 'Not started yet' : 'Live scoring in progress') + '</div>' +
+          (phase === 'final' ? 'Final — reopen to keep editing' :
+            phase === 'pregame' ? 'Pre-game — not started yet' :
+            phase === 'halftime' ? 'Halftime — clock and scoring paused' : 'Live scoring in progress') + '</div>' +
       '</div>' +
 
       '<div class="scoreboard">' +
         scoreCard(homeTeam, game.homeTeamId, game.homeScore, 'HOME') +
         '<div class="clock-box">' +
-          '<div class="quarter">Quarter ' + game.quarter + ' / ' + state.league.quarters + '</div>' +
-          '<div class="clock' + (running ? ' running' : '') + '" id="live-clock">' + ui.fmtClock(left) + '</div>' +
+          '<div class="quarter">' + (phase === 'halftime' ? 'Halftime' : 'Quarter ' + game.quarter + ' / ' + state.league.quarters) + '</div>' +
+          '<div class="clock' + (running ? ' running' : '') + '" id="live-clock">' +
+            (phase === 'halftime' ? 'HT' : ui.fmtClock(left)) + '</div>' +
           '<div class="clock-actions">' +
             '<button type="button" class="btn btn-mini" data-action="toggle-clock"' + (canScore ? '' : ' disabled') + '>' +
               (running ? '⏸ Pause' : '▶ Start') + ' clock</button>' +
@@ -509,43 +643,31 @@
         '<div class="console-panel">' +
           '<div class="console-head">' +
             '<div><h3>Record a play</h3>' +
-              '<p class="panel-note">Scoring for <strong>' +
-                ui.esc(teamName(state, selectedTeamId)) + '</strong> — click the other score to switch sides.</p></div>' +
+              '<p class="panel-note">Recording for <strong>' + teamLabel + '</strong>' +
+                (selIsOurs ? '' : ' (opponent — team totals, no roster needed)') +
+                ' — tap the other score to switch sides.</p></div>' +
             '<button type="button" class="btn btn-mini" data-action="show-shortcuts">' +
               ui.icon('keyboard') + ' Shortcuts</button>' +
           '</div>' +
-          '<div class="roster-strip">' + chips + '</div>' +
-          (roster.length ?
-            '<details class="lineup-panel"><summary>On court (' + lineup.length + '/5) · ' +
-              (lineupMinutes.players ? 'lineup clock tracked' : 'optional lineup tracking') + '</summary>' +
-              '<div class="lineup-toggles">' + lineupButtons + '</div>' +
-              '<p class="footnote">Toggling a player records a substitution and starts/stops their ' +
-                'lineup minutes. Leave it alone to keep the classic stat-line minutes.</p></details>' : '') +
-          '<div class="stat-grid">' + playButtons + '</div>' +
-          '<div class="shot-spot-wrap">' +
-            '<h4 class="shot-spot-title">Shot spot <span class="muted small">(optional — attaches to the next shot)</span></h4>' +
-            '<canvas id="shot-spot" class="chart-canvas shot-canvas" role="img" ' +
-              'aria-label="Tap the court to mark where the next shot was taken"></canvas>' +
-            '<div class="shot-spot-bar"><span id="shot-spot-label" class="small muted"></span>' +
-              '<button type="button" class="btn btn-mini" id="shot-clear" data-action="clear-shot">Clear spot</button></div>' +
+          '<div class="entry-mode" role="group" aria-label="Entry mode">' +
+            '<button type="button" class="mode-btn' + (mode === 'twotap' ? ' is-on' : '') +
+              '" data-action="set-mode" data-mode="twotap" aria-pressed="' + (mode === 'twotap') + '">Two-tap</button>' +
+            '<button type="button" class="mode-btn' + (mode === 'classic' ? ' is-on' : '') +
+              '" data-action="set-mode" data-mode="classic" aria-pressed="' + (mode === 'classic') + '">Classic (player first)</button>' +
           '</div>' +
+          (mode === 'twotap' ? twoTapPanel : classicPanel) +
+          shotSpot +
           '<div class="console-actions">' +
             '<button type="button" class="btn btn-ghost" data-action="undo"' +
-              (canScore && game.events.length ? '' : ' disabled') + '>' + ui.icon('undo') + ' Undo last play</button>' +
-            (game.status === 'scheduled'
-              ? '<button type="button" class="btn btn-primary" data-action="start-game">Start game</button>' : '') +
-            (game.status === 'live'
-              ? '<button type="button" class="btn btn-primary" data-action="finalize">Finalize game</button>' : '') +
-            (game.status === 'final'
-              ? '<button type="button" class="btn btn-ghost" data-action="reopen">Reopen for edits</button>' : '') +
+              (game.events.length ? '' : ' disabled') + '>' + ui.icon('undo') + ' Undo last play</button>' +
+            statusButtons +
             '<button type="button" class="btn btn-ghost" data-action="edit-box">Edit box score</button>' +
-            '<button type="button" class="btn btn-mini" data-action="show-shortcuts">' +
-              'Press ? for keys</button>' +
           '</div>' +
           '<p class="console-status">' +
             (canScore ? 'Every tap is saved instantly. ' + game.events.length + ' plays logged.' :
-              game.status === 'scheduled' ? 'Start the game to enable scoring.' :
-                'This game is final. Reopen it to add plays, or edit the box score directly.') +
+              phase === 'pregame' ? 'Start the game to enable scoring.' :
+                phase === 'halftime' ? 'Halftime: resume the second half to keep scoring.' :
+                  'This game is final. Reopen it to add plays, or edit the box score directly.') +
           '</p>' +
         '</div>' +
         '<div class="console-panel">' +
@@ -621,7 +743,7 @@
             id: id, date: values.date, time: values.time,
             location: String(values.location || '').trim(),
             season: d.league.season,
-            status: 'scheduled',
+            status: 'scheduled', halftime: false,
             homeTeamId: values.homeTeamId, awayTeamId: awayTeamId,
             homeScore: 0, awayScore: 0, quarter: 1,
             clockSeconds: d.league.quarterMinutes * 60, clockRunningSince: null,
@@ -646,6 +768,8 @@
     selectedTeamId = null;
     selectedPlayerId = null;
     pendingShot = null;
+    pendingStat = null;
+    lastRecorded = '';
     const select = qs('#live-game-select');
     if (select && Array.from(select.options).some(o => o.value === id)) select.value = id;
     if (TBS.app.activeTab && TBS.app.activeTab() === 'live') render(TBS.app.getState());
@@ -655,15 +779,28 @@
     const state = TBS.app.getState();
     const game = activeGame(state);
     if (!game) return;
-    const roster = state.players
-      .filter(p => p.teamId === selectedTeamId && p.active !== false)
-      .sort((a, b) => (Number(a.number) || 999) - (Number(b.number) || 999));
+    const roster = rosterOf(state, selectedTeamId);
     if (!roster.length) { ui.toast('No active players on this team.', 'error'); return; }
     let index = roster.findIndex(p => p.id === selectedPlayerId);
     if (index < 0) index = delta > 0 ? -1 : 0;
     index = (index + delta + roster.length) % roster.length;
     selectedPlayerId = roster[index].id;
     render(state);
+  }
+
+  /* Two-tap step 2: a jersey (or the opponent team total) completes a play. */
+  function completeTwoTap(game, playerId) {
+    if (!pendingStat) { ui.toast('Tap a stat first, then the jersey number.', 'info'); return; }
+    if (applyPlay(game.id, pendingStat, selectedTeamId, playerId || '')) {
+      pendingStat = null;
+    }
+  }
+
+  function requireLive(game) {
+    if (pl.phaseOf(game) === 'live') return true;
+    ui.toast(pl.phaseOf(game) === 'halftime' ? 'Halftime — resume the second half first.'
+      : 'Start or reopen the game first.', 'error');
+    return false;
   }
 
   function init() {
@@ -681,7 +818,7 @@
 
     host.addEventListener('click', e => {
       const btn = e.target.closest('[data-action]');
-      if (!btn) return;
+      if (!btn || btn.disabled) return;
       const state = TBS.app.getState();
       const game = activeGame(state);
       const action = btn.dataset.action;
@@ -691,6 +828,10 @@
       if (!game) return;
 
       switch (action) {
+        case 'set-mode':
+          setEntryMode(btn.dataset.mode);
+          render(state);
+          break;
         case 'select-team':
           if (btn.dataset.team !== selectedTeamId) {
             selectedTeamId = btn.dataset.team;
@@ -699,26 +840,36 @@
             render(state);
           }
           break;
+        case 'tt-stat':
+          if (!requireLive(game)) return;
+          pendingStat = pendingStat === btn.dataset.play ? null : btn.dataset.play;
+          render(state);
+          break;
+        case 'tt-target':
+          if (!requireLive(game)) return;
+          completeTwoTap(game, btn.dataset.id);
+          render(TBS.app.getState());
+          break;
         case 'select-player':
-          if (btn.dataset.id !== selectedPlayerId) {
-            selectedPlayerId = btn.dataset.id;
-            render(state);
-          }
+          selectedPlayerId = btn.dataset.id || null;
+          render(state);
           break;
         case 'toggle-court':
           toggleOnCourt(game.id, btn.dataset.id);
           break;
         case 'manual-score':
-          if (game.status !== 'live') { ui.toast('Start or reopen the game first.', 'error'); return; }
+          if (!requireLive(game)) return;
           manualScore(game.id, btn.dataset.team, Number(btn.dataset.delta));
           break;
         case 'play':
-          if (game.status !== 'live') { ui.toast('Start or reopen the game first.', 'error'); return; }
-          applyPlay(game.id, btn.dataset.play, selectedTeamId, selectedPlayerId);
+          if (!requireLive(game)) return;
+          applyPlay(game.id, btn.dataset.play, selectedTeamId, selectedPlayerId || '');
           break;
         case 'toggle-clock': toggleClock(game.id); break;
         case 'next-quarter': nextQuarter(game.id); break;
         case 'reset-clock': resetClock(game.id); break;
+        case 'halftime': startHalftime(game.id); break;
+        case 'resume': resumeFromHalftime(game.id); break;
         case 'undo': undoLast(game.id); break;
         case 'start-game':
           setStatus(game.id, 'scheduled');
@@ -780,8 +931,8 @@
       const state = TBS.app.getState();
       const game = shortcutGame();
       if (!game) return;
-      if (game.status !== 'live') { ui.toast('Start or reopen the game first.', 'error'); return; }
-      applyPlay(game.id, playKey, selectedTeamId, selectedPlayerId);
+      if (!requireLive(game)) return;
+      applyPlay(game.id, playKey, selectedTeamId, selectedPlayerId || '');
       render(state);
     },
     shortcutUndo: function () {
@@ -791,18 +942,20 @@
     shortcutClock: function () {
       const game = shortcutGame();
       if (!game) return;
-      if (game.status !== 'live') { ui.toast('Start the game first.', 'error'); return; }
+      if (pl.phaseOf(game) !== 'live') { ui.toast('Start the game first.', 'error'); return; }
       toggleClock(game.id);
     },
     shortcutNextQuarter: function () {
       const game = shortcutGame();
       if (!game) return;
-      if (game.status !== 'live') { ui.toast('Start the game first.', 'error'); return; }
+      if (pl.phaseOf(game) !== 'live') { ui.toast('Start the game first.', 'error'); return; }
       nextQuarter(game.id);
     },
     cyclePlayer: selectPlayer,
     selected: function () {
-      return { gameId: selectedGameId, teamId: selectedTeamId, playerId: selectedPlayerId };
-    }
+      return { gameId: selectedGameId, teamId: selectedTeamId, playerId: selectedPlayerId, pendingStat: pendingStat };
+    },
+    entryMode: entryMode,
+    setEntryMode: setEntryMode
   };
 })(window.TBS = window.TBS || {});
