@@ -69,6 +69,10 @@ check('health reports the version and that checkout is not configured', async ()
 
 check('static files: app is served; server code, tests, data and traversal are not', async () => {
   assert.strictEqual((await call('GET', '/', undefined, { noCookie: true })).status, 200);
+  const manifest = await call('GET', '/manifest.webmanifest', undefined, { noCookie: true });
+  assert.strictEqual(manifest.status, 200);
+  assert.ok(/application\/manifest\+json/.test(manifest.headers.get('content-type')));
+  assert.strictEqual((await call('GET', '/sw.js', undefined, { noCookie: true })).status, 200);
   const js = await call('GET', '/js/app.js', undefined, { noCookie: true });
   assert.strictEqual(js.status, 200);
   assert.ok(/javascript/.test(js.headers.get('content-type')));

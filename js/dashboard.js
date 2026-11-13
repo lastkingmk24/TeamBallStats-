@@ -192,9 +192,9 @@
 
     return '<article class="hero" style="--hero-accent:' + ui.esc(accent) + '" data-game="' + ui.esc(game.id) + '">' +
       '<div class="hero-banner">' +
-        '<span class="hero-banner-text">STREAM LIKE YOU’RE COURTSIDE</span>' +
-        '<span class="hero-banner-brand">' + ui.icon('trophy') + ' League Pass</span>' +
-        '<button type="button" class="hero-banner-btn" data-action="go-schedule">SIGN UP NOW</button>' +
+        '<span class="hero-banner-text">FEATURED GAME</span>' +
+        '<span class="hero-banner-brand">' + ui.icon('trophy') + ' Your league</span>' +
+        '<button type="button" class="hero-banner-btn" data-action="go-schedule">View schedule →</button>' +
       '</div>' +
       '<div class="hero-body">' +
         '<div class="hero-scene" aria-hidden="true">' +
@@ -225,13 +225,13 @@
           '<div class="hero-actions">' +
             (liveGame
               ? '<button type="button" class="btn hero-btn-primary" data-action="hero-live" data-id="' + ui.esc(game.id) + '">' +
-                ui.icon('play') + ' WATCH</button>'
+                ui.icon('play') + ' Open live console</button>'
               : '<button type="button" class="btn hero-btn-primary" data-action="hero-box" data-id="' + ui.esc(game.id) + '">' +
-                ui.icon('play') + ' WATCH</button>') +
+                ui.icon('play') + ' View game</button>') +
             '<button type="button" class="btn hero-btn-ghost" data-action="hero-box" data-id="' + ui.esc(game.id) + '">BOX SCORE</button>' +
           '</div>' +
           (related.length
-            ? '<div class="hero-related"><h4>RELATED CONTENT</h4>' +
+            ? '<div class="hero-related"><h4>GAME NOTES</h4>' +
                 related.map(line => '<button type="button" class="hero-related-item" data-action="hero-box" data-id="' +
                   ui.esc(game.id) + '">' + ui.icon('play') + '<span>' + ui.esc(line) + '</span></button>').join('') +
               '</div>'
