@@ -183,12 +183,12 @@ check('revision history keeps every accepted write and can be read back', async 
   assert.strictEqual((await call('GET', '/api/league/revisions/abc')).status, 404);
 });
 
-check('Pro endpoints refuse a free account with 403 pro_required', async () => {
+check('insight endpoints allow every account but protect cloud data with sign-in', async () => {
   let r = await call('POST', '/api/pro/recap', { gameId: 'game-1' });
-  assert.strictEqual(r.status, 403);
-  assert.strictEqual(r.json.error, 'pro_required');
+  assert.strictEqual(r.status, 200);
+  assert.ok(r.json.measured);
   r = await call('POST', '/api/pro/lineups', {});
-  assert.strictEqual(r.status, 403);
+  assert.strictEqual(r.status, 200);
   r = await call('POST', '/api/pro/recap', { gameId: 'game-1' }, { noCookie: true });
   assert.strictEqual(r.status, 401, 'signed-out users get 401, not a Pro answer');
 });
@@ -245,11 +245,11 @@ check('a webhook for an unknown user is refused and leaves no billing event behi
   assert.strictEqual(server.database.prepare("SELECT COUNT(*) AS n FROM billing_events WHERE event_id = 'evt_3'").get().n, 0, 'transaction rolled back');
 });
 
-check('a cancellation webhook removes Pro access immediately', async () => {
+check('a legacy cancellation webhook does not gate insights', async () => {
   const body = JSON.stringify({ id: 'evt_4', type: 'entitlement.canceled', data: { username: 'alice' } });
   const r = await call('POST', '/api/billing/webhook', body, { noCookie: true, headers: { 'Content-Type': 'application/json', 'X-TBS-Signature': sign(body) } });
   assert.strictEqual(r.status, 200);
-  assert.strictEqual((await call('POST', '/api/pro/recap', { gameId: 'game-1' })).status, 403);
+  assert.strictEqual((await call('POST', '/api/pro/recap', { gameId: 'game-1' })).status, 200);
 });
 
 check('operator CLI grants and revokes a manual Pro entitlement, with an audit entry', async () => {
@@ -259,20 +259,20 @@ check('operator CLI grants and revokes a manual Pro entitlement, with an audit e
   assert.strictEqual(me.json.entitlement.source, 'manual');
   assert.strictEqual((await call('POST', '/api/pro/recap', { gameId: 'game-1' })).status, 200);
   assert.strictEqual(cli.main(['revoke-pro', 'alice']), 0);
-  assert.strictEqual((await call('POST', '/api/pro/recap', { gameId: 'game-1' })).status, 403);
+  assert.strictEqual((await call('POST', '/api/pro/recap', { gameId: 'game-1' })).status, 200);
   assert.strictEqual(cli.main(['grant-pro', 'alice', '--days', '0']), 1, 'bad --days refused');
   assert.strictEqual(cli.main(['grant-pro', 'ghost']), 1, 'unknown user refused');
   const audit = server.database.prepare("SELECT action FROM audit_log WHERE actor = 'cli' ORDER BY id").all().map(r => r.action);
   assert.deepStrictEqual(audit, ['entitlement.manual_grant', 'entitlement.manual_revoke']);
 });
 
-check('a grant whose period has ended grants nothing', async () => {
+check('expired legacy entitlements do not gate insights', async () => {
   server.database.prepare("UPDATE entitlements SET period_end = ? WHERE user_id = (SELECT id FROM users WHERE username = 'alice')")
     .run(new Date(Date.now() - 1000).toISOString());
   assert.strictEqual(cli.main(['grant-pro', 'alice', '--days', '1']), 0);
   server.database.prepare("UPDATE entitlements SET period_end = ? WHERE user_id = (SELECT id FROM users WHERE username = 'alice')")
     .run(new Date(Date.now() - 1000).toISOString());
-  assert.strictEqual((await call('POST', '/api/pro/recap', { gameId: 'game-1' })).status, 403);
+  assert.strictEqual((await call('POST', '/api/pro/recap', { gameId: 'game-1' })).status, 200);
 });
 
 check('logout clears the cookie and invalidates the session', async () => {

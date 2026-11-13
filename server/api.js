@@ -5,14 +5,14 @@
  *   Cloud sync   GET|PUT /api/league · GET /api/league/revisions[/:rev]
  *   Billing      GET /api/billing/status · POST /checkout (501 until a
  *                provider is configured) · POST /webhook (HMAC-verified)
- *   Pro (gated)  POST /api/pro/recap · /api/pro/lineups   (entitlement check)
+ *   Insights (legacy paths)  POST /api/pro/recap · /api/pro/lineups
  *
  * Rules enforced here, not in the browser:
  *   - a league write must name the revision it was based on; a stale write
  *     gets 409 with the server copy and is never applied silently;
  *   - an empty league cannot replace a non-empty one unless explicitly allowed;
  *   - every accepted write runs inside one transaction and keeps a revision;
- *   - Pro output requires an active entitlement for the signed-in user.
+ *   - Insights require sign-in only; no subscription or entitlement is required.
  * ========================================================================= */
 'use strict';
 
@@ -354,17 +354,7 @@ function createApi(db, options) {
     }
   }
 
-  /* ---- Pro (server-enforced) ------------------------------------------- */
-
-  function requirePro(req, feature) {
-    const user = requireUser(req);
-    if (config.PRO_FEATURES.indexOf(feature) < 0) return user;
-    const ent = entitlementOf(user.id);
-    if (!ent.active) {
-      throw new HttpError(403, 'pro_required', 'This feature needs a Pro subscription. Free features keep working without it.', { feature: feature, entitlement: ent });
-    }
-    return user;
-  }
+  /* ---- Game insights (legacy /pro paths) ------------------------------------------- */
 
   /* The client may send its current document (freshest). Otherwise the
    * cloud copy is used. Either way the document is validated first. */
@@ -380,7 +370,7 @@ function createApi(db, options) {
   }
 
   async function proRecap(req, res) {
-    const user = requirePro(req, 'recap');
+    const user = requireUser(req);
     const body = await readJson(req);
     if (typeof body.gameId !== 'string' || !body.gameId) throw new HttpError(400, 'invalid_input', 'gameId is required.');
     const doc = await proDocument(req, body, user);
@@ -392,7 +382,7 @@ function createApi(db, options) {
   }
 
   async function proLineups(req, res) {
-    const user = requirePro(req, 'lineups');
+    const user = requireUser(req);
     const body = await readJson(req);
     const doc = await proDocument(req, body, user);
     const minMinutes = Number.isFinite(Number(body.minMinutes)) ? Number(body.minMinutes) : undefined;

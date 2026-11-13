@@ -508,7 +508,7 @@ same files work from `file://` and from any static host.
 ## Team sync server (optional)
 
 The app runs fully offline from one browser. The optional server in `server/`
-adds accounts, cloud sync between devices, and Pro analytics. It needs Node.js
+adds accounts and cloud sync between devices. Game insights run locally without it. It needs Node.js
 22.13 or later and no npm install.
 
 ```bash
@@ -520,10 +520,13 @@ node server/index.js          # http://localhost:8080 (PORT in .env)
   is behind gets a conflict dialog. Nothing is overwritten until you choose
   **Merge both**, **Use cloud copy** or **Keep this device**. Changes made
   offline are queued and sent when the server is back.
-* **Pro.** Recap and lineup rankings are computed on the server for accounts
-  with an active Pro entitlement. The recap is rule-based and labelled as such,
-  not AI-generated. No payment is taken: the operator grants Pro with
-  `node server/cli.js grant-pro <username>`.
+* **Game insights (free, offline).** Recaps and lineup rankings are computed in
+  your browser from recorded plays. No Pro plan, payment or cloud account is
+  required. Measured statistics and rule-based analysis are labelled separately.
+  The legacy `/api/pro/*` endpoints remain available to signed-in accounts
+  without entitlement checks for compatibility.
+* **Static hosting.** Cloud controls are hidden when no API is detected. Scoring,
+  shot charts, game flow, recaps and lineup insights still work on GitHub Pages.
 * **Data.** The database is `data/teamballstats.db` (SQLite, WAL). It is never
   committed. The server keeps the last 50 revisions per league.
 

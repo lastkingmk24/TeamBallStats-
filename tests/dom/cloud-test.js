@@ -139,21 +139,29 @@ async function run() {
     assert.strictEqual(serverDoc().games.length, 3);
   });
 
-  await step('the Pro panel explains the free plan and offers no Pro output', async () => {
+  await step('game insights are available without a Pro entitlement', async () => {
     T().boxscores.openGame('game-1');
     T().boxscores.render(state());
     await sleep(30);
-    assert.ok(/Free plan/.test(text('#pro-panel')), 'free plan message');
-    assert.ok(!$('[data-pro="recap"]'), 'no recap button for free accounts');
+    assert.ok(/Game insights/.test(text('#pro-panel')), 'no upsell');
+    assert.ok($('[data-pro="recap"]'), 'recap available for all accounts');
+    forwardFetch.offline = true;
+    try {
+      click($('[data-pro="recap"]'));
+      await until(() => /Measured/.test(text('#pro-output')), 2000, 'offline recap');
+      assert.ok(/Riverside Hawks/.test(text('#pro-output')));
+      click($('[data-pro="lineups"]'));
+      assert.ok(/Lineup rankings/.test(text('#pro-output')), 'offline lineups');
+    } finally { forwardFetch.offline = false; }
   });
 
-  await step('a free account is refused by the server for Pro recap (403)', async () => {
+  await step('the legacy insight API also allows an account without an entitlement', async () => {
     const r = await T().cloud.request('POST', 'pro/recap', { gameId: 'game-1', document: state() });
-    assert.strictEqual(r.status, 403);
-    assert.strictEqual(r.json.error, 'pro_required');
+    assert.strictEqual(r.status, 200);
+    assert.ok(r.json.measured);
   });
 
-  await step('after an entitlement is granted, the recap is computed on the server and labelled', async () => {
+  await step('legacy entitlement refresh does not block local game insights', async () => {
     const u = dbUser('coach');
     server.database.prepare(`INSERT INTO entitlements (user_id, plan, status, source, period_end, updated_at) VALUES (?, 'pro', 'active', 'manual', NULL, ?)`)
       .run(u.id, new Date().toISOString());

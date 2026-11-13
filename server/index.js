@@ -93,7 +93,7 @@ if (require.main === module) {
   server.listen(config.PORT, config.HOST, () => {
     console.log('TeamBallStats ' + config.VERSION + ' listening on http://' + config.HOST + ':' + config.PORT);
     console.log('Data file: ' + config.DB_FILE);
-    console.log('Payments: not configured (Pro is granted by the operator, see docs/DEPLOY.md)');
+    console.log('Game insights: free, available offline in the app');
   });
 }
 
