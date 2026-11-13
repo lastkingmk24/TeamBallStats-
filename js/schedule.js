@@ -131,7 +131,7 @@
         teamDot(state, g.homeTeamId) + ui.esc(teamName(state, g.homeTeamId)),
       meta: (g.time ? ui.fmtTime(g.time) + ' · ' : '') + (g.location || '') +
         (g.notes ? ' · ' + g.notes : ''),
-      badge: ui.statusBadge(g.status) + (g.status === 'final'
+      badge: ui.statusBadge(g.status, g.halftime) + (g.status === 'final'
         ? ' <span class="timeline-score">' + ui.fmtInt(g.homeScore) + '–' + ui.fmtInt(g.awayScore) + '</span>'
         : ''),
       status: g.status,
@@ -209,7 +209,7 @@
           game.status = values.status;
           game.location = String(values.location || '').trim();
           game.notes = String(values.notes || '').trim();
-          if (game.status !== 'live') game.clockRunningSince = null;
+          if (game.status !== 'live') { TBS.plays.freezeShot(game, d.league); game.clockRunningSince = null; }
         });
         close();
         ui.toast('Fixture updated.', 'success');

@@ -31,9 +31,10 @@ including the court graphics and charts, is pure CSS and `<canvas>`.
 10. [Migration contract (v1 → v2 → v3)](#migration-contract-v1--v2--v3)
 11. [Testing](#testing)
 12. [Deployment](#deployment)
-13. [Accessibility, privacy and offline use](#accessibility-privacy-and-offline-use)
-14. [Troubleshooting](#troubleshooting)
-15. [What changed in v3](#what-changed-in-v3)
+13. [Team sync server (optional)](#team-sync-server-optional)
+14. [Accessibility, privacy and offline use](#accessibility-privacy-and-offline-use)
+15. [Troubleshooting](#troubleshooting)
+16. [What changed in v3](#what-changed-in-v3)
 
 ---
 
@@ -460,9 +461,14 @@ from the current install.
 No dependencies, no install step:
 
 ```bash
-node tests/smoke.js
+node tests/smoke.js                 # app logic, 59 checks
+node tests/engine.js                # server-side engine, 16 checks
+timeout 120 node tests/server.js    # sync server API, 25 checks (temp database)
 for f in js/*.js tests/*.js; do node --check "$f"; done
 ```
+
+Browser tests (`tests/dom/`) need `jsdom` installed outside the repository; see
+[docs/DEPLOY.md](docs/DEPLOY.md#9-before-you-deploy).
 
 `tests/smoke.js` runs in Node with a `localStorage` stub and covers, among other
 things:
@@ -496,6 +502,33 @@ load time.
 Pages with no build step (no `npm install`, no `next build`, no artifact other
 than the checkout). Because every path is relative and every asset is local, the
 same files work from `file://` and from any static host.
+
+---
+
+## Team sync server (optional)
+
+The app runs fully offline from one browser. The optional server in `server/`
+adds accounts, cloud sync between devices, and Pro analytics. It needs Node.js
+22.13 or later and no npm install.
+
+```bash
+cp .env.example .env          # edit values; see the file for each setting
+node server/index.js          # http://localhost:8080 (PORT in .env)
+```
+
+* **Sync.** Sign in from the cloud panel. Each save is a revision. A device that
+  is behind gets a conflict dialog. Nothing is overwritten until you choose
+  **Merge both**, **Use cloud copy** or **Keep this device**. Changes made
+  offline are queued and sent when the server is back.
+* **Pro.** Recap and lineup rankings are computed on the server for accounts
+  with an active Pro entitlement. The recap is rule-based and labelled as such,
+  not AI-generated. No payment is taken: the operator grants Pro with
+  `node server/cli.js grant-pro <username>`.
+* **Data.** The database is `data/teamballstats.db` (SQLite, WAL). It is never
+  committed. The server keeps the last 50 revisions per league.
+
+Full reference: [docs/API.md](docs/API.md). Setup, HTTPS, backups and operator
+commands: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ---
 

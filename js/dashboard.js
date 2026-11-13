@@ -419,7 +419,7 @@
           ' @ ' + ui.esc(teamName(state, g.homeTeamId)) + '</strong>' +
           '<div class="mini-meta">' + ui.fmtDate(g.date) + (g.time ? ' · ' + ui.fmtTime(g.time) : '') +
           (ui.relativeDate(g.date) ? ' · ' + ui.relativeDate(g.date) : '') + '</div></div>' +
-          ui.statusBadge(g.status) + '</div>').join('') + '</div>' +
+          ui.statusBadge(g.status, g.halftime) + '</div>').join('') + '</div>' +
         '<button type="button" class="btn btn-mini" data-action="go-schedule" style="margin-top:.75rem">Open schedule →</button>'
       : ui.emptyState('No upcoming games', 'Add a fixture on the Schedule tab.',
           '<button type="button" class="btn btn-primary" data-action="go-schedule">Go to Schedule</button>');

@@ -349,10 +349,15 @@
         <div class="toolbar no-print">
           <label class="field field-inline"><span>Game</span><select id="box-game-select" aria-label="Select game"></select></label>
           <button type="button" id="box-edit-btn" class="btn btn-ghost">Edit box score</button>
-          <button type="button" id="box-print-btn" class="btn btn-ghost">Print / PDF</button>
+          <button type="button" id="box-print-btn" class="btn btn-ghost">Print</button>
+          <button type="button" id="box-pdf-btn" class="btn btn-ghost">Download PDF</button>
+          <button type="button" id="box-csv-btn" class="btn btn-ghost">Box score CSV</button>
+          <button type="button" id="box-share-btn" class="btn btn-ghost">Share</button>
+          <button type="button" id="box-email-btn" class="btn btn-ghost">E-mail report</button>
           <button type="button" id="box-delete-btn" class="btn btn-danger-ghost">Delete game</button>
         </div>
         <div id="box-content"></div>
+        <div id="pro-panel" class="panel pro-panel no-print" aria-live="polite"></div>
       </section>
 
       <!-- ================= STANDINGS ================= -->
@@ -495,6 +500,11 @@
           </div>
         </div>
 
+        <div class="panel cloud-wrap no-print">
+          <div class="cloud-head"><span class="badge" id="cloud-status-chip" data-state="off">Checking</span></div>
+          <div id="cloud-panel"></div>
+        </div>
+
         <div class="panel-grid two">
           <form id="settings-form" class="panel form-panel no-print">
             <h3>League settings</h3>
@@ -504,6 +514,7 @@
               <label class="field"><span>My team name</span><input id="setting-team-name" type="text" required /></label>
               <label class="field"><span>Quarters</span><input id="setting-quarters" type="number" min="1" max="8" step="1" required /></label>
               <label class="field"><span>Minutes / quarter</span><input id="setting-quarter-minutes" type="number" min="1" max="60" step="1" required /></label>
+              <label class="field"><span>Shot clock (seconds)</span><input id="setting-shot-clock" type="number" min="0" max="60" step="1" placeholder="0 = off" /><small>Optional. Common values: 24 or 14. 0 turns it off.</small></label>
               <label class="field"><span>Default appearance</span>
                 <select id="setting-theme">
                   <option value="system">Follow the device</option>
@@ -577,6 +588,7 @@
   <script src="js/storage.js"></script>
   <script src="js/stats.js"></script>
   <script src="js/analytics.js"></script>
+  <script src="js/plays.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/theme.js"></script>
   <script src="js/photos.js"></script>
@@ -587,13 +599,20 @@
   <script src="js/teams.js"></script>
   <script src="js/schedule.js"></script>
   <script src="js/live.js"></script>
+  <script src="js/pdf.js"></script>
+  <script src="js/summary.js"></script>
+  <script src="js/pro.js"></script>
+  <script src="js/share.js"></script>
   <script src="js/boxscores.js"></script>
   <script src="js/standings.js"></script>
   <script src="js/leaders.js"></script>
   <script src="js/profiles.js"></script>
   <script src="js/reports.js"></script>
+  <script src="js/merge.js"></script>
   <script src="js/export.js"></script>
   <script src="js/access.js"></script>
+  <script src="js/cloud.js"></script>
+  <script src="js/proui.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

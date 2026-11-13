@@ -243,10 +243,17 @@
       : 'Could not save — localStorage may be disabled in this browser or private window.', 'error');
   }
 
+  /* Every local change goes through commit() or replace(); the cloud client
+   * debounces a push from here. It is a no-op when signed out or offline. */
+  function notifyCloud() {
+    if (TBS.cloud && typeof TBS.cloud.notify === 'function') TBS.cloud.notify();
+  }
+
   function commit(mutator) {
     if (typeof mutator === 'function') mutator(state);
     const ok = storage.saveData(state);
     if (!ok) saveFailureToast();
+    notifyCloud();
     renderAll();
     return ok;
   }
@@ -257,6 +264,7 @@
     if (!ok) saveFailureToast();
     if (TBS.theme) TBS.theme.refresh(state.league.theme);
     if (auth() && auth().syncSession) auth().syncSession(state);
+    notifyCloud();
     renderAll();
     return ok;
   }
@@ -315,7 +323,7 @@
         catch (err) { console.error('[TeamBallStats] init failed in ' + tab + ':', err); }
       }
     });
-    ['profiles', 'shortcuts', 'access'].forEach(name => {
+    ['profiles', 'shortcuts', 'access', 'share', 'cloud', 'proui'].forEach(name => {
       const mod = TBS[name];
       if (mod && typeof mod.init === 'function') {
         try { mod.init(); }
@@ -379,7 +387,7 @@
           '<span class="pass-date">' + ui.esc(ui.fmtDate(g.date)) + '</span>' +
           '<span class="pass-matchup">' + ui.esc(team(g.awayTeamId).short || team(g.awayTeamId).name) + ' @ ' +
             ui.esc(team(g.homeTeamId).short || team(g.homeTeamId).name) + '</span>' +
-          ui.statusBadge(g.status) + '</div>';
+          ui.statusBadge(g.status, g.halftime) + '</div>';
         ui.openDialog({
           title: state.league.name + ' · League Pass',
           bodyHtml:

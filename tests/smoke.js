@@ -202,14 +202,14 @@ check('preserves players, jersey numbers, positions and adds photo=""', () => {
   assert.strictEqual(data.players[0].photo, '');
 });
 
-check('preserves games, scores and expands stat lines to 14 fields', () => {
+check('preserves games, scores and expands stat lines to 16 fields', () => {
   assert.strictEqual(data.games.length, 2);
   assert.strictEqual(data.games[0].homeScore, 68);
   assert.strictEqual(data.games[0].awayScore, 61);
   assert.strictEqual(data.games[0].status, 'final');
   assert.strictEqual(data.games[0].stats[0].pts, 22);
   assert.strictEqual(data.games[0].stats[0].tpa, 0);
-  assert.strictEqual(Object.keys(data.games[0].stats[0]).length, 16); // playerId + teamId + 14 stats
+  assert.strictEqual(Object.keys(data.games[0].stats[0]).length, 18); // playerId + teamId + 16 stats (incl. oreb/dreb)
 });
 
 check('adds safe v3 defaults: lineup, empty events, empty season', () => {
@@ -854,6 +854,195 @@ check('summarize() reports v3 counts including photos and play events', () => {
   assert.strictEqual(summary.photos, 2);
   assert.ok(summary.playEvents > 100);
   assert.strictEqual(summary.statLines, 18);
+});
+
+/* ---- Phase 2/4/6 additions: CSV, storage normalizer, halftime, PDF ---- */
+
+const EXPORT_FILES = ['js/storage.js', 'js/stats.js', 'js/analytics.js', 'js/plays.js',
+  'js/pdf.js', 'js/summary.js', 'js/pro.js'];
+const exportSample = JSON.parse(fs.readFileSync(path.join(ROOT, 'sample-data.json'), 'utf8'));
+const exp = context({ [DB_KEY]: JSON.stringify(exportSample) }, EXPORT_FILES);
+
+/* Minimal RFC 4180 parser: quoted fields, doubled quotes, CRLF rows. */
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = '', i = 0, q = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (q) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i += 2; continue; }
+      if (c === '"') { q = false; i++; continue; }
+      field += c; i++; continue;
+    }
+    if (c === '"') { q = true; i++; continue; }
+    if (c === ',') { row.push(field); field = ''; i++; continue; }
+    if (c === '\r' && text[i + 1] === '\n') { row.push(field); rows.push(row); row = []; field = ''; i += 2; continue; }
+    field += c; i++;
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+check('box score CSV has OREB/DREB columns, a fixed width per row, and team rows', () => {
+  const st = exp.TBS.storage.coerce(exportSample);
+  const game = st.games.find(g => g.status === 'final');
+  assert.ok(game, 'sample has a final game');
+  const csv = exp.TBS.summary.boxScoreCSV(game, st.players, st.teams, st.league);
+  const rows = parseCSV(csv);
+  const header = rows[0];
+  assert.ok(header.indexOf('OREB') >= 0 && header.indexOf('DREB') >= 0, 'header has OREB and DREB');
+  assert.strictEqual(header.length, exp.TBS.summary.BOX_HEADER.length);
+  rows.forEach((r, i) => assert.strictEqual(r.length, header.length, 'row ' + i + ' has ' + header.length + ' columns'));
+  const teamNames = rows.slice(1).map(r => r[2]);
+  assert.ok(teamNames.indexOf(st.teams.find(t => t.id === game.homeTeamId).name) >= 0, 'home team rows present');
+});
+
+check('CSV file wrapper prepends one UTF-8 BOM and uses CRLF', () => {
+  const out = exp.TBS.summary.csvFile('a,b\r\n1,2\r\n');
+  assert.strictEqual(out.charCodeAt(0), 0xFEFF);
+  assert.strictEqual(out.charCodeAt(1), 'a'.charCodeAt(0));
+  assert.strictEqual(exp.TBS.summary.csvFile(out).charCodeAt(1), 'a'.charCodeAt(0));
+  assert.ok(out.indexOf('\r\n') > 0);
+});
+
+check('csvCell neutralises spreadsheet formulas but keeps real negatives and quoting', () => {
+  const c = exp.TBS.stats.csvCell;
+  assert.strictEqual(c('=HYPERLINK(1)'), "'=HYPERLINK(1)");
+  assert.strictEqual(c('=1+1'), "'=1+1");
+  assert.strictEqual(c('+1'), "'+1");
+  assert.strictEqual(c('@SUM(A1)'), "'@SUM(A1)");
+  assert.strictEqual(c('-x'), "'-x");
+  assert.strictEqual(c('-3'), '-3');
+  assert.strictEqual(c(12), '12');
+  assert.strictEqual(c('a,b'), '"a,b"');
+  assert.strictEqual(c('say "hi"'), '"say ""hi"""');
+  assert.strictEqual(c(''), '');
+});
+
+check('a malicious team name cannot start a spreadsheet formula in the box score CSV', () => {
+  const st = exp.TBS.storage.coerce(exportSample);
+  const game = st.games.find(g => g.status === 'final');
+  const home = st.teams.find(t => t.id === game.homeTeamId);
+  home.name = '=HYPERLINK(1)';
+  const rows = parseCSV(exp.TBS.summary.boxScoreCSV(game, st.players, st.teams, st.league));
+  let seen = 0;
+  rows.slice(1).forEach(r => r.forEach(cell => {
+    if (/HYPERLINK/.test(cell)) { seen++; assert.strictEqual(cell.charAt(0), "'", 'cell is prefixed: ' + cell); }
+  }));
+  assert.ok(seen > 0, 'the team name appears in the export');
+});
+
+check('storage normalizer: halftime is kept only on live games; oreb/dreb default to 0', () => {
+  const base = JSON.parse(JSON.stringify(exportSample));
+  const g = base.games.find(x => x.status === 'final') || base.games[0];
+  g.status = 'live';
+  g.halftime = true;
+  g.stats.forEach(s => { delete s.oreb; delete s.dreb; });
+  const lg = exp.TBS.storage.coerce(base).games.find(x => x.id === g.id);
+  assert.strictEqual(lg.halftime, true, 'live halftime kept');
+  assert.ok(lg.stats.every(s => s.oreb === 0 && s.dreb === 0), 'oreb/dreb default to 0');
+  g.status = 'final';
+  const fin = exp.TBS.storage.coerce(base).games.find(x => x.id === g.id);
+  assert.strictEqual(fin.halftime, false, 'halftime forced false when not live');
+});
+
+check('phaseOf reports pregame / live / halftime / final from status and the halftime flag', () => {
+  const p = exp.TBS.plays;
+  assert.strictEqual(p.phaseOf({ status: 'scheduled' }), 'pregame');
+  assert.strictEqual(p.phaseOf({ status: 'live', halftime: false }), 'live');
+  assert.strictEqual(p.phaseOf({ status: 'live', halftime: true }), 'halftime');
+  assert.strictEqual(p.phaseOf({ status: 'final' }), 'final');
+});
+
+check('pdf.build writes a valid PDF: header, pages, title, escapes, and byte-exact xref', () => {
+  const blocks = [{ type: 'h1', text: 'Game (test) \\ report' }, { type: 'p', text: 'Hello' }];
+  for (let i = 0; i < 60; i++) blocks.push({ type: 'p', text: 'Line ' + i + ' of a long report body that should wrap.' });
+  const bytes = exp.TBS.pdf.build({ title: 'Test report', footer: 'TeamBallStats', blocks: blocks });
+  const text = Buffer.from(bytes).toString('latin1');
+  assert.strictEqual(text.slice(0, 8), '%PDF-1.4');
+  assert.ok(text.indexOf('/Title (Test report)') >= 0, 'title in info dictionary');
+  assert.ok(text.indexOf('Game \\(test\\) \\\\ report') >= 0, 'escaped characters in content');
+  const pages = (text.match(/\/Type \/Page[^s]/g) || []).length;
+  assert.ok(pages >= 2, 'multiple pages: ' + pages);
+  const xrefAt = text.lastIndexOf('\nxref\n');
+  assert.ok(xrefAt > 0, 'xref table present');
+  const m = /\nxref\n0 (\d+)\n/.exec(text.slice(xrefAt));
+  const count = Number(m[1]);
+  const entries = text.slice(xrefAt + m[0].length).split('\n').slice(0, count);
+  assert.strictEqual(entries[0].slice(0, 10), '0000000000');
+  for (let n = 1; n < count; n++) {
+    const off = Number(entries[n].slice(0, 10));
+    assert.strictEqual(text.slice(off, off + (String(n).length + 6)), n + ' 0 obj', 'object ' + n + ' at offset ' + off);
+  }
+  assert.ok(/startxref\n\d+\n%%EOF\s*$/.test(text), 'trailer ends with startxref and EOF');
+});
+
+check('merge: a new game from another device keeps its opponent aggregate lines', () => {
+  const mctx = context({ [DB_KEY]: JSON.stringify(exportSample) }, ['js/storage.js', 'js/stats.js', 'js/analytics.js', 'js/merge.js']);
+  const base = mctx.TBS.storage.coerce(exportSample);
+  const incoming = JSON.parse(JSON.stringify(exportSample));
+  const src = incoming.games.find(g => g.id === 'game-1');
+  const newGame = JSON.parse(JSON.stringify(src));
+  newGame.id = 'game-from-other-device';
+  newGame.date = '2026-12-02';
+  newGame.stats.push(Object.assign(mctx.TBS.storage.blankAggregate(src.awayTeamId), { tov: 3, fga: 40 }));
+  incoming.games.push(newGame);
+  const merged = mctx.TBS.merge.mergeData(base, incoming);
+  const added = merged.games.find(g => g.id === 'game-from-other-device');
+  assert.ok(added, 'new game added');
+  const aggs = added.stats.filter(x => x.aggregate);
+  assert.strictEqual(aggs.length, 1, 'opponent aggregate line kept');
+  assert.strictEqual(aggs[0].tov, 3);
+  assert.strictEqual(aggs[0].playerId, '');
+});
+
+check('merge: an incoming game is added when new, and existing records are never overwritten', () => {
+  const mctx = context({ [DB_KEY]: JSON.stringify(exportSample) }, ['js/storage.js', 'js/stats.js', 'js/analytics.js', 'js/merge.js']);
+  const base = mctx.TBS.storage.coerce(exportSample);
+  const incoming = JSON.parse(JSON.stringify(exportSample));
+  incoming.games[0].notes = 'changed remotely';
+  incoming.games.push(Object.assign(JSON.parse(JSON.stringify(exportSample.games[0])), { id: 'game-new', date: '2026-12-01', homeScore: 1, awayScore: 0 }));
+  const merged = mctx.TBS.merge.mergeData(base, incoming);
+  assert.ok(merged.games.some(g => g.id === 'game-new'), 'new game added');
+  assert.strictEqual(merged.games.find(g => g.id === 'game-1').notes, base.games.find(g => g.id === 'game-1').notes, 'existing game kept as is');
+});
+
+check('shot clock: runs from a reset, freezes without losing time, and is off when league.shotClock is 0', () => {
+  const P = exp.TBS.plays;
+  const lg = { shotClock: 24 };
+  const now = 1e12;
+  const g = { shotClockSeconds: null, shotRunningSince: null };
+  assert.strictEqual(P.shotRemaining(g, lg, now), 24, 'full at start');
+  g.shotRunningSince = now - 5000;
+  assert.strictEqual(P.shotRemaining(g, lg, now), 19, 'counts down while running');
+  P.freezeShot(g, lg, now);
+  assert.strictEqual(g.shotClockSeconds, 19, 'freeze keeps the time left');
+  assert.strictEqual(g.shotRunningSince, null, 'freeze stops it');
+  assert.strictEqual(P.shotRemaining(g, lg, now + 60000), 19, 'time while stopped is not consumed');
+  assert.strictEqual(P.shotRemaining(g, { shotClock: 0 }, now), null, 'off when the league setting is 0');
+  assert.strictEqual(P.shotFull({ shotClock: 0 }), 0);
+  P.resetShot(g, lg, now, true);
+  assert.strictEqual(g.shotClockSeconds, 24, 'reset restores the full value');
+  assert.strictEqual(g.shotRunningSince, now, 'reset while the game clock runs starts it');
+  P.resetShot(g, lg, now, false);
+  assert.strictEqual(g.shotRunningSince, null, 'reset while the game clock is stopped leaves it stopped');
+});
+
+check('storage keeps the shot clock setting and drops a running shot clock when the game clock is stopped', () => {
+  const base = JSON.parse(JSON.stringify(exportSample));
+  base.league.shotClock = 14;
+  const g = base.games.find(x => x.status === 'final') || base.games[0];
+  g.status = 'live';
+  g.clockRunningSince = null;
+  g.shotRunningSince = 12345;
+  g.shotClockSeconds = 9;
+  const out = exp.TBS.storage.coerce(base);
+  assert.strictEqual(out.league.shotClock, 14, 'league shot clock kept');
+  const lg = out.games.find(x => x.id === g.id);
+  assert.strictEqual(lg.shotRunningSince, null, 'running shot clock dropped without a running game clock');
+  assert.strictEqual(lg.shotClockSeconds, 9, 'remaining time kept');
+  const v3 = exp.TBS.storage.coerce(JSON.parse(JSON.stringify(exportSample)));
+  assert.strictEqual(v3.league.shotClock, 0, 'default is off');
 });
 
 Promise.all(pendingChecks).then(() => {

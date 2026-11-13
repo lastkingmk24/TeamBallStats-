@@ -16,3 +16,6 @@ __pycache__/
 *.pyc
 .env
 venv/
+
+# Server runtime data (SQLite database, backups). Never commit.
+data/

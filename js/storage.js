@@ -27,6 +27,9 @@
  * event    = { id, type, label, teamId, playerId, statDeltas, scoreDelta,
  *              shot: {x,y}|null, quarter, clockSeconds, ts }
  * status   = 'scheduled' | 'live' | 'final'
+ *             (halftime is a flag on a live game: games[].halftime)
+ * stats[]   player lines { playerId, teamId, ...STAT_FIELDS } and opponent
+ *           aggregate lines { playerId: '', teamId, aggregate: true, ...STAT_FIELDS }
  * theme    = 'system' | 'dark' | 'light'
  *
  * Every normalizer copies unknown keys from the source object, so documents
@@ -42,8 +45,10 @@
   const STATUSES = ['scheduled', 'live', 'final'];
   const EVENT_TYPES = ['game', 'practice', 'other'];
   const THEMES = ['system', 'dark', 'light'];
+  /* oreb / dreb are additive (v3 data without them defaults to 0); reb stays
+   * the total rebound count so every historical total is unchanged. */
   const STAT_FIELDS = [
-    'pts', 'reb', 'ast', 'stl', 'blk', 'tov',
+    'pts', 'reb', 'oreb', 'dreb', 'ast', 'stl', 'blk', 'tov',
     'fgm', 'fga', 'tpm', 'tpa', 'ftm', 'fta', 'pf', 'min'
   ];
   const PLAYER_POSITIONS = ['PG', 'SG', 'SF', 'PF', 'C'];
@@ -97,6 +102,14 @@
     return line;
   }
 
+  /* Opponent (or any team) aggregate line: no roster player, team totals only.
+   * Stored in game.stats with an empty playerId and aggregate: true. */
+  function blankAggregate(teamId) {
+    const line = blankStats('', teamId);
+    line.aggregate = true;
+    return line;
+  }
+
   function blankLineup() {
     return { home: [], away: [] };
   }
@@ -115,6 +128,7 @@
         primaryTeamId: team.id,
         quarters: 4,
         quarterMinutes: 10,
+        shotClock: 0,
         theme: 'system'
       },
       teams: [team],
@@ -265,8 +279,17 @@
       awayTeamId = ensureTeamById(ctx.teams, uid('team'), 'Opponent').id;
     }
 
-    const stats = records(g.stats).filter(rawLine => str(rawLine.playerId, '')).map(s => {
+    /* Player lines need a playerId. Aggregate lines (aggregate: true) belong to
+     * one of the two teams and carry team totals with no player. */
+    const isKeptLine = rawLine => !!str(rawLine.playerId, '') ||
+      (rawLine.aggregate === true && (str(rawLine.teamId, '') === homeTeamId || str(rawLine.teamId, '') === awayTeamId));
+    const stats = records(g.stats).filter(isKeptLine).map(s => {
       const playerId = str(s.playerId, '');
+      if (!playerId) {
+        const agg = blankAggregate(str(s.teamId, homeTeamId));
+        STAT_FIELDS.forEach(f => { agg[f] = Math.max(0, num(s[f], 0)); });
+        return keepExtras(s, agg);
+      }
       const player = ctx.players.find(p => p.id === playerId);
       const line = blankStats(playerId, str(s.teamId, player ? player.teamId : homeTeamId));
       STAT_FIELDS.forEach(f => { line[f] = Math.max(0, num(s[f], 0)); });
@@ -294,6 +317,7 @@
       location: str(g.location, ''),
       season: str(g.season, ''),
       status: status,
+      halftime: status === 'live' ? bool(g.halftime, false) : false,
       homeTeamId: homeTeamId,
       awayTeamId: awayTeamId,
       homeScore: homeScore,
@@ -301,6 +325,8 @@
       quarter: Math.min(ctx.league.quarters, Math.max(1, Math.round(num(g.quarter, 1)))),
       clockSeconds: Math.max(0, num(g.clockSeconds, status === 'final' ? 0 : ctx.league.quarterMinutes * 60)),
       clockRunningSince: g.clockRunningSince ? num(g.clockRunningSince, 0) : null,
+      shotClockSeconds: (g.shotClockSeconds === null || g.shotClockSeconds === undefined) ? null : Math.max(0, num(g.shotClockSeconds, 0)),
+      shotRunningSince: (g.shotRunningSince && g.clockRunningSince) ? num(g.shotRunningSince, 0) : null,
       lineup: lineup,
       stats: stats,
       events: (Array.isArray(g.events) ? g.events : []).map(normalizeEvent),
@@ -334,6 +360,7 @@
       primaryTeamId: str(league.primaryTeamId, ''),
       quarters: Math.max(1, Math.min(8, Math.round(num(league.quarters, 4)))),
       quarterMinutes: Math.max(1, Math.min(60, Math.round(num(league.quarterMinutes, 10)))),
+      shotClock: Math.max(0, Math.min(60, Math.round(num(league.shotClock, 0)))),
       theme: normalizeTheme(league.theme)
     });
 
@@ -447,6 +474,7 @@
     out.league.season = str(l.season, out.league.season);
     out.league.quarters = Math.max(1, Math.min(8, Math.round(num(l.quarters, 4))));
     out.league.quarterMinutes = Math.max(1, Math.min(60, Math.round(num(l.quarterMinutes, 10))));
+    out.league.shotClock = 0;
     out.teams[0].name = teamName;
     out.teams[0].short = teamName.slice(0, 3).toUpperCase() || 'MY';
     const primaryId = out.teams[0].id;
@@ -734,6 +762,7 @@
     bool: bool,
     todayISO: todayISO,
     blankStats: blankStats,
+    blankAggregate: blankAggregate,
     blankLineup: blankLineup,
     defaultData: defaultData,
     normalizePhoto: normalizePhoto,
