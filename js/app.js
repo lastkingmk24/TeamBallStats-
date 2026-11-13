@@ -243,10 +243,17 @@
       : 'Could not save — localStorage may be disabled in this browser or private window.', 'error');
   }
 
+  /* Every local change goes through commit() or replace(); the cloud client
+   * debounces a push from here. It is a no-op when signed out or offline. */
+  function notifyCloud() {
+    if (TBS.cloud && typeof TBS.cloud.notify === 'function') TBS.cloud.notify();
+  }
+
   function commit(mutator) {
     if (typeof mutator === 'function') mutator(state);
     const ok = storage.saveData(state);
     if (!ok) saveFailureToast();
+    notifyCloud();
     renderAll();
     return ok;
   }
@@ -257,6 +264,7 @@
     if (!ok) saveFailureToast();
     if (TBS.theme) TBS.theme.refresh(state.league.theme);
     if (auth() && auth().syncSession) auth().syncSession(state);
+    notifyCloud();
     renderAll();
     return ok;
   }
@@ -315,7 +323,7 @@
         catch (err) { console.error('[TeamBallStats] init failed in ' + tab + ':', err); }
       }
     });
-    ['profiles', 'shortcuts', 'access', 'share'].forEach(name => {
+    ['profiles', 'shortcuts', 'access', 'share', 'cloud', 'proui'].forEach(name => {
       const mod = TBS[name];
       if (mod && typeof mod.init === 'function') {
         try { mod.init(); }

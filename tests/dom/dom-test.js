@@ -336,6 +336,45 @@ async function run() {
     assert.ok(/LIVE/.test(T().ui.statusBadge('live', false)));
   });
 
+  ok('SHOT CLOCK: shows when enabled, starts with the game clock, pauses with it, and Reset restores it', () => {
+    T().app.commit(d => {
+      d.league.shotClock = 24;
+      const g = d.games.find(x => x.id === 'game-1');
+      g.status = 'live'; g.quarter = 2; g.clockSeconds = 300; g.clockRunningSince = null;
+      g.shotClockSeconds = null; g.shotRunningSince = null; g.halftime = false;
+    });
+    T().live.openGame('game-1');
+    assert.strictEqual($('#live-shot-clock').textContent, '24', 'shot clock shows 24');
+    click($('[data-action="toggle-clock"]'));
+    assert.ok(gameOf('game-1').shotRunningSince, 'shot clock starts with the game clock');
+    click($('[data-action="toggle-clock"]'));
+    assert.strictEqual(gameOf('game-1').shotRunningSince, null, 'shot clock stops with the game clock');
+    assert.ok(gameOf('game-1').shotClockSeconds <= 24);
+    click($('[data-action="reset-shot"]'));
+    assert.strictEqual(gameOf('game-1').shotClockSeconds, 24, 'reset restores the full shot clock');
+    assert.strictEqual($('#live-shot-clock').textContent, '24');
+  });
+
+  await (async () => {
+    T().app.go('live');
+    await sleep(60);
+    const stat = doc.querySelector('[data-action="tt-stat"][data-play="dreb"]');
+    assert.ok(stat, 'two-tap DREB button is shown');
+    click(stat);
+    const jersey = doc.querySelector('[data-action="tt-target"][data-id]:not([data-id=""])');
+    assert.ok(jersey, 'a jersey button for our team is shown');
+    click(jersey);
+    await sleep(20);
+    const press = key => doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: key, bubbles: true }));
+    const sumOf = f => gameOf('game-1').stats.reduce((n, s) => n + (s[f] || 0), 0);
+    const d0 = sumOf('dreb'), o0 = sumOf('oreb');
+    press('r');
+    assert.strictEqual(sumOf('dreb'), d0 + 1, 'R adds one defensive rebound');
+    press('o');
+    assert.strictEqual(sumOf('oreb'), o0 + 1, 'O adds one offensive rebound');
+    passed++; console.log('  ✓ KEYBOARD: R records a defensive rebound and O records an offensive rebound');
+  })();
+
   console.log('\n✅ ' + passed + ' DOM checks passed.');
   if (errors.length) console.log('Runtime errors captured (' + errors.length + '):\n' + errors.slice(0, 5).join('\n---\n'));
 }

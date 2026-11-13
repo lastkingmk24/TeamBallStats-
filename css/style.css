@@ -2599,3 +2599,24 @@ kbd {
 .aggregate-row td { border-top: 2px dashed var(--border-strong); }
 .team-total-chip { border-style: dashed; }
 .clock-box .quarter:empty { display: none; }
+
+/* ---- v6: cloud sync panel, Pro analytics panel ----------------------- */
+.cloud-wrap { margin-bottom: 1.25rem; }
+.cloud-head { display: flex; justify-content: flex-end; margin-bottom: .4rem; }
+#cloud-status-chip[data-state="saved"] { background: var(--accent-soft); color: var(--accent); }
+#cloud-status-chip[data-state="conflict"],
+#cloud-status-chip[data-state="error"] { background: var(--surface-3); color: var(--text); font-weight: 700; }
+#cloud-panel h3 { margin-top: 0; }
+#cloud-panel .form-grid { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.pro-panel { margin-top: 1.25rem; }
+.pro-panel .section-head { margin-bottom: .5rem; }
+.pro-panel h4 { margin: 1rem 0 .25rem; }
+.pro-panel h5 { margin: .9rem 0 .25rem; }
+.pro-block + .pro-block { border-top: 1px solid var(--line, var(--surface-3)); margin-top: 1rem; padding-top: .25rem; }
+.pro-gate { padding: .5rem 0; }
+.plain-list { margin: .3rem 0 0; padding-left: 1.2rem; }
+.plain-list li { margin: .35rem 0; line-height: 1.45; }
+.pro-panel .table-scroll { margin-top: .5rem; }
+.shot-clock { display: flex; align-items: center; justify-content: center; gap: .5rem; margin: .3rem 0 .4rem; font-size: .9rem; color: var(--muted); flex-wrap: wrap; }
+.shot-clock strong { font-size: 1.4rem; color: var(--text); font-variant-numeric: tabular-nums; min-width: 2ch; text-align: center; }
+.shot-clock.expired strong { color: var(--accent); }

@@ -128,6 +128,7 @@
         primaryTeamId: team.id,
         quarters: 4,
         quarterMinutes: 10,
+        shotClock: 0,
         theme: 'system'
       },
       teams: [team],
@@ -324,6 +325,8 @@
       quarter: Math.min(ctx.league.quarters, Math.max(1, Math.round(num(g.quarter, 1)))),
       clockSeconds: Math.max(0, num(g.clockSeconds, status === 'final' ? 0 : ctx.league.quarterMinutes * 60)),
       clockRunningSince: g.clockRunningSince ? num(g.clockRunningSince, 0) : null,
+      shotClockSeconds: (g.shotClockSeconds === null || g.shotClockSeconds === undefined) ? null : Math.max(0, num(g.shotClockSeconds, 0)),
+      shotRunningSince: (g.shotRunningSince && g.clockRunningSince) ? num(g.shotRunningSince, 0) : null,
       lineup: lineup,
       stats: stats,
       events: (Array.isArray(g.events) ? g.events : []).map(normalizeEvent),
@@ -357,6 +360,7 @@
       primaryTeamId: str(league.primaryTeamId, ''),
       quarters: Math.max(1, Math.min(8, Math.round(num(league.quarters, 4)))),
       quarterMinutes: Math.max(1, Math.min(60, Math.round(num(league.quarterMinutes, 10)))),
+      shotClock: Math.max(0, Math.min(60, Math.round(num(league.shotClock, 0)))),
       theme: normalizeTheme(league.theme)
     });
 
@@ -470,6 +474,7 @@
     out.league.season = str(l.season, out.league.season);
     out.league.quarters = Math.max(1, Math.min(8, Math.round(num(l.quarters, 4))));
     out.league.quarterMinutes = Math.max(1, Math.min(60, Math.round(num(l.quarterMinutes, 10))));
+    out.league.shotClock = 0;
     out.teams[0].name = teamName;
     out.teams[0].short = teamName.slice(0, 3).toUpperCase() || 'MY';
     const primaryId = out.teams[0].id;

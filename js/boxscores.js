@@ -204,6 +204,7 @@
     select.innerHTML = ui.gameOptions(sorted, state.teams, selectedGameId, '');
     const game = activeGame(state);
     if (selectedGameId) select.value = selectedGameId;
+    if (TBS.proui) TBS.proui.render(game || null);
 
     const editBtn = qs('#box-edit-btn');
     const printBtn = qs('#box-print-btn');
@@ -402,7 +403,7 @@
           g.awayScore = payload.awayScore;
           g.notes = payload.notes;
           g.status = status;
-          if (status !== 'live') { g.clockRunningSince = null; g.halftime = false; }
+          if (status !== 'live') { TBS.plays.freezeShot(g, d.league); g.clockRunningSince = null; g.halftime = false; }
         });
         ui.toast('Box score saved.', 'success');
       }

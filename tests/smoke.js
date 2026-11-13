@@ -977,6 +977,74 @@ check('pdf.build writes a valid PDF: header, pages, title, escapes, and byte-exa
   assert.ok(/startxref\n\d+\n%%EOF\s*$/.test(text), 'trailer ends with startxref and EOF');
 });
 
+check('merge: a new game from another device keeps its opponent aggregate lines', () => {
+  const mctx = context({ [DB_KEY]: JSON.stringify(exportSample) }, ['js/storage.js', 'js/stats.js', 'js/analytics.js', 'js/merge.js']);
+  const base = mctx.TBS.storage.coerce(exportSample);
+  const incoming = JSON.parse(JSON.stringify(exportSample));
+  const src = incoming.games.find(g => g.id === 'game-1');
+  const newGame = JSON.parse(JSON.stringify(src));
+  newGame.id = 'game-from-other-device';
+  newGame.date = '2026-12-02';
+  newGame.stats.push(Object.assign(mctx.TBS.storage.blankAggregate(src.awayTeamId), { tov: 3, fga: 40 }));
+  incoming.games.push(newGame);
+  const merged = mctx.TBS.merge.mergeData(base, incoming);
+  const added = merged.games.find(g => g.id === 'game-from-other-device');
+  assert.ok(added, 'new game added');
+  const aggs = added.stats.filter(x => x.aggregate);
+  assert.strictEqual(aggs.length, 1, 'opponent aggregate line kept');
+  assert.strictEqual(aggs[0].tov, 3);
+  assert.strictEqual(aggs[0].playerId, '');
+});
+
+check('merge: an incoming game is added when new, and existing records are never overwritten', () => {
+  const mctx = context({ [DB_KEY]: JSON.stringify(exportSample) }, ['js/storage.js', 'js/stats.js', 'js/analytics.js', 'js/merge.js']);
+  const base = mctx.TBS.storage.coerce(exportSample);
+  const incoming = JSON.parse(JSON.stringify(exportSample));
+  incoming.games[0].notes = 'changed remotely';
+  incoming.games.push(Object.assign(JSON.parse(JSON.stringify(exportSample.games[0])), { id: 'game-new', date: '2026-12-01', homeScore: 1, awayScore: 0 }));
+  const merged = mctx.TBS.merge.mergeData(base, incoming);
+  assert.ok(merged.games.some(g => g.id === 'game-new'), 'new game added');
+  assert.strictEqual(merged.games.find(g => g.id === 'game-1').notes, base.games.find(g => g.id === 'game-1').notes, 'existing game kept as is');
+});
+
+check('shot clock: runs from a reset, freezes without losing time, and is off when league.shotClock is 0', () => {
+  const P = exp.TBS.plays;
+  const lg = { shotClock: 24 };
+  const now = 1e12;
+  const g = { shotClockSeconds: null, shotRunningSince: null };
+  assert.strictEqual(P.shotRemaining(g, lg, now), 24, 'full at start');
+  g.shotRunningSince = now - 5000;
+  assert.strictEqual(P.shotRemaining(g, lg, now), 19, 'counts down while running');
+  P.freezeShot(g, lg, now);
+  assert.strictEqual(g.shotClockSeconds, 19, 'freeze keeps the time left');
+  assert.strictEqual(g.shotRunningSince, null, 'freeze stops it');
+  assert.strictEqual(P.shotRemaining(g, lg, now + 60000), 19, 'time while stopped is not consumed');
+  assert.strictEqual(P.shotRemaining(g, { shotClock: 0 }, now), null, 'off when the league setting is 0');
+  assert.strictEqual(P.shotFull({ shotClock: 0 }), 0);
+  P.resetShot(g, lg, now, true);
+  assert.strictEqual(g.shotClockSeconds, 24, 'reset restores the full value');
+  assert.strictEqual(g.shotRunningSince, now, 'reset while the game clock runs starts it');
+  P.resetShot(g, lg, now, false);
+  assert.strictEqual(g.shotRunningSince, null, 'reset while the game clock is stopped leaves it stopped');
+});
+
+check('storage keeps the shot clock setting and drops a running shot clock when the game clock is stopped', () => {
+  const base = JSON.parse(JSON.stringify(exportSample));
+  base.league.shotClock = 14;
+  const g = base.games.find(x => x.status === 'final') || base.games[0];
+  g.status = 'live';
+  g.clockRunningSince = null;
+  g.shotRunningSince = 12345;
+  g.shotClockSeconds = 9;
+  const out = exp.TBS.storage.coerce(base);
+  assert.strictEqual(out.league.shotClock, 14, 'league shot clock kept');
+  const lg = out.games.find(x => x.id === g.id);
+  assert.strictEqual(lg.shotRunningSince, null, 'running shot clock dropped without a running game clock');
+  assert.strictEqual(lg.shotClockSeconds, 9, 'remaining time kept');
+  const v3 = exp.TBS.storage.coerce(JSON.parse(JSON.stringify(exportSample)));
+  assert.strictEqual(v3.league.shotClock, 0, 'default is off');
+});
+
 Promise.all(pendingChecks).then(() => {
   console.log('\n✅ ' + passed + ' smoke tests passed (Node built-ins only).');
 }).catch(err => { console.error(err); process.exitCode = 1; });

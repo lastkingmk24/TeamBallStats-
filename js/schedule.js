@@ -209,7 +209,7 @@
           game.status = values.status;
           game.location = String(values.location || '').trim();
           game.notes = String(values.notes || '').trim();
-          if (game.status !== 'live') game.clockRunningSince = null;
+          if (game.status !== 'live') { TBS.plays.freezeShot(game, d.league); game.clockRunningSince = null; }
         });
         close();
         ui.toast('Fixture updated.', 'success');

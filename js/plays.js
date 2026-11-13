@@ -218,6 +218,39 @@
   }
 
   /* Game phase used by the console, scoreboard and status badges. */
+  /* ---- shot clock (optional; league.shotClock seconds, 0 = off) --------
+   * game.shotClockSeconds: remaining at the last freeze (null = full).
+   * game.shotRunningSince: ms timestamp while the shot clock runs.
+   * The shot clock only runs while the game clock runs; every place that
+   * stops the game clock calls freezeShot() first so no time is lost. */
+  function shotFull(league) {
+    const v = Math.round(Number(league && league.shotClock) || 0);
+    return v > 0 ? Math.min(60, v) : 0;
+  }
+
+  function shotRemaining(game, league, now) {
+    const full = shotFull(league);
+    if (!full) return null;
+    const base = game.shotClockSeconds === null || game.shotClockSeconds === undefined
+      ? full : Number(game.shotClockSeconds) || 0;
+    if (!game.shotRunningSince) return Math.max(0, base);
+    return Math.max(0, base - ((now || Date.now()) - Number(game.shotRunningSince)) / 1000);
+  }
+
+  /* Stop the shot clock and keep what is left. Safe when it is not running. */
+  function freezeShot(game, league, now) {
+    if (!game || !game.shotRunningSince) return;
+    const left = shotRemaining(game, league || { shotClock: game.shotClockSeconds }, now);
+    game.shotClockSeconds = Math.ceil(left);
+    game.shotRunningSince = null;
+  }
+
+  function resetShot(game, league, now, running) {
+    if (!shotFull(league)) return;
+    game.shotClockSeconds = shotFull(league);
+    game.shotRunningSince = running ? (now || Date.now()) : null;
+  }
+
   function phaseOf(game) {
     if (!game) return 'pregame';
     if (game.status === 'final') return 'final';
@@ -228,6 +261,10 @@
   TBS.plays = {
     PLAYS: PLAYS,
     SHOT_PLAYS: SHOT_PLAYS,
+    shotFull: shotFull,
+    shotRemaining: shotRemaining,
+    freezeShot: freezeShot,
+    resetShot: resetShot,
     BONUS_FOULS: BONUS_FOULS,
     sideOf: sideOf,
     isAggregate: isAggregate,

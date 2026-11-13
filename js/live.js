@@ -150,10 +150,20 @@
     const left = remainingSeconds(game);
     const el = qs('#live-clock');
     if (el) el.textContent = ui.fmtClock(left);
+    const shotLeft = TBS.plays.shotRemaining(game, TBS.app.getState().league);
+    const shotEl = qs('#live-shot-clock');
+    if (shotEl && shotLeft !== null) shotEl.textContent = String(Math.ceil(shotLeft));
+    if (shotLeft !== null && shotLeft <= 0 && game.shotRunningSince) {
+      TBS.app.commit(d => {
+        const g = d.games.find(x => x.id === game.id);
+        if (g) TBS.plays.freezeShot(g, d.league);
+      });
+      ui.toast('Shot clock expired. Reset it when possession changes.', 'error');
+    }
     if (left <= 0) {
       TBS.app.commit(d => {
         const g = d.games.find(x => x.id === game.id);
-        if (g) { g.clockSeconds = 0; g.clockRunningSince = null; }
+        if (g) { TBS.plays.freezeShot(g, d.league); g.clockSeconds = 0; g.clockRunningSince = null; }
       });
       ui.toast('Quarter clock reached 0:00. Advance to the next quarter.', 'info');
       ensureTimer(TBS.app.getState());
@@ -167,10 +177,12 @@
       if (g.halftime) { ui.toast('Resume the second half before starting the clock.', 'error'); return; }
       if (g.clockRunningSince) {
         g.clockSeconds = Math.ceil(remainingSeconds(g));
+        TBS.plays.freezeShot(g, d.league);
         g.clockRunningSince = null;
       } else {
         if (g.clockSeconds <= 0) { ui.toast('Clock is at 0:00 — advance the quarter first.', 'error'); return; }
         g.clockRunningSince = Date.now();
+        if (TBS.plays.shotFull(d.league) && TBS.plays.shotRemaining(g, d.league) > 0) g.shotRunningSince = g.clockRunningSince;
       }
     });
   }
@@ -186,7 +198,18 @@
       g.quarter += 1;
       g.halftime = false;
       g.clockSeconds = d.league.quarterMinutes * 60;
+      TBS.plays.freezeShot(g, d.league);
       g.clockRunningSince = null;
+      TBS.plays.resetShot(g, d.league, null, false);
+    });
+  }
+
+  function resetShotClock(gameId) {
+    TBS.app.commit(d => {
+      const g = d.games.find(x => x.id === gameId);
+      if (!g || !TBS.plays.shotFull(d.league)) return;
+      TBS.plays.freezeShot(g, d.league);
+      TBS.plays.resetShot(g, d.league, Date.now(), !!g.clockRunningSince);
     });
   }
 
@@ -195,6 +218,7 @@
       const g = d.games.find(x => x.id === gameId);
       if (!g) return;
       g.clockSeconds = d.league.quarterMinutes * 60;
+      TBS.plays.freezeShot(g, d.league);
       g.clockRunningSince = null;
     });
   }
@@ -207,6 +231,7 @@
       if (!g || g.status !== 'live') return;
       if (g.clockRunningSince) {
         g.clockSeconds = Math.ceil(remainingSeconds(g));
+        TBS.plays.freezeShot(g, d.league);
         g.clockRunningSince = null;
       }
       g.halftime = true;
@@ -221,7 +246,9 @@
       g.halftime = false;
       if (g.quarter < d.league.quarters) g.quarter += 1;
       g.clockSeconds = d.league.quarterMinutes * 60;
+      TBS.plays.freezeShot(g, d.league);
       g.clockRunningSince = null;
+      TBS.plays.resetShot(g, d.league, null, false);
     });
     ui.toast('Back on the floor. Start the clock when play resumes.', 'success');
   }
@@ -232,6 +259,7 @@
       if (!g) return;
       if (g.clockRunningSince) {
         g.clockSeconds = Math.ceil(remainingSeconds(g));
+        TBS.plays.freezeShot(g, d.league);
         g.clockRunningSince = null;
       }
       g.status = status;
@@ -473,6 +501,7 @@
     const canScore = phase === 'live';
     const running = !!game.clockRunningSince && !game.halftime;
     const left = remainingSeconds(game);
+    const shotLeft = TBS.plays.shotRemaining(game, state.league);
     const ours = ourTeamId(state, game);
     const oppId = ours === game.homeTeamId ? game.awayTeamId : game.homeTeamId;
     const homeTeam = teamOf(state, game.homeTeamId);
@@ -629,6 +658,11 @@
           '<div class="quarter">' + (phase === 'halftime' ? 'Halftime' : 'Quarter ' + game.quarter + ' / ' + state.league.quarters) + '</div>' +
           '<div class="clock' + (running ? ' running' : '') + '" id="live-clock">' +
             (phase === 'halftime' ? 'HT' : ui.fmtClock(left)) + '</div>' +
+          (TBS.plays.shotFull(state.league) ?
+            '<div class="shot-clock' + (shotLeft !== null && shotLeft <= 0 ? ' expired' : '') + '">' +
+              'Shot clock <strong id="live-shot-clock">' + (shotLeft === null ? '' : Math.ceil(shotLeft)) + '</strong>' +
+              ' <button type="button" class="btn btn-mini" data-action="reset-shot"' + (canScore ? '' : ' disabled') + '>Reset to ' + TBS.plays.shotFull(state.league) + '</button>' +
+            '</div>' : '') +
           '<div class="clock-actions">' +
             '<button type="button" class="btn btn-mini" data-action="toggle-clock"' + (canScore ? '' : ' disabled') + '>' +
               (running ? '⏸ Pause' : '▶ Start') + ' clock</button>' +
@@ -793,6 +827,8 @@
     if (!pendingStat) { ui.toast('Tap a stat first, then the jersey number.', 'info'); return; }
     if (applyPlay(game.id, pendingStat, selectedTeamId, playerId || '')) {
       pendingStat = null;
+      /* Remember the jersey so keyboard shortcuts (R, O, ...) act on the same player. */
+      if (playerId) selectedPlayerId = playerId;
     }
   }
 
@@ -868,6 +904,7 @@
         case 'toggle-clock': toggleClock(game.id); break;
         case 'next-quarter': nextQuarter(game.id); break;
         case 'reset-clock': resetClock(game.id); break;
+        case 'reset-shot': resetShotClock(game.id); break;
         case 'halftime': startHalftime(game.id); break;
         case 'resume': resumeFromHalftime(game.id); break;
         case 'undo': undoLast(game.id); break;
