@@ -80,5 +80,5 @@ Project name is unchanged: **TeamBallStats**.
 | 6 | Exports and sharing: CSV (BOM + injection guard, box score CSV), PDF game report, share, e-mail | done for browser buttons (DOM-tested) and Node tests (CSV columns, BOM, formula guard, PDF xref). Share opens the summary dialog when the Web Share API is absent |
 | 7 | Accounts and cloud sync (server + browser client, conflicts, offline) | done (server tests 25, browser cloud test 13). Three-way merge: cloud-only game edits are taken, local-only edits kept, both-changed games keep this device and say so |
 | 8 | Subscription: entitlements, webhook, CLI grant, payments reported as not configured | done for server side (signed webhook, de-duplicated events, CLI grant/revoke with audit). No payment provider is bundled, so checkout returns 501 |
-| 9 | Tests (Node unit + server integration + browser DOM test), bug fixes | planned |
-| 10 | Documentation: README, `.env.example`, install / dev / deploy guides | planned |
+| 9 | Tests (Node unit + server integration + browser DOM test), bug fixes | done: smoke 59, engine 16, server 25 (Node only), DOM 26 and cloud 13 (jsdom, outside the repo) |
+| 10 | Documentation: README, `.env.example`, install / dev / deploy guides | done: README section, `.env.example`, `docs/API.md`, `docs/DEPLOY.md` |
