@@ -2,7 +2,7 @@
 
 A **zero-dependency basketball team manager that runs entirely in the browser.**
 Plain HTML, plain CSS, plain `<script>` tags — no framework, no bundler, no build
-step, no `package.json`, no CDN, no network requests. Open `index.html` from
+step, no `package.json`, no CDN. Open `index.html` from
 `file://`, or push the repository to GitHub Pages exactly as it is.
 
 Everything you enter — teams, players, jersey numbers, photos, games, box
@@ -11,9 +11,8 @@ browser's `localStorage` under the key **`bball_tm_v1`** and can be exported as 
 single JSON file at any time. Username/password accounts are kept separately in
 **`bball_tm_accounts_v1`** and are never included in a league backup.
 
-TeamBallStats ships no images, fonts or icons at all — not even in this README —
-so there is nothing to download and nothing that can break offline. The UI,
-including the court graphics and charts, is pure CSS and `<canvas>`.
+The interface uses system fonts, CSS and `<canvas>`, with local app icons for
+home-screen installation. No third-party assets are required.
 
 ---
 
@@ -61,6 +60,34 @@ league management account. The league starts empty but functional: one team,
 no players, no games. League management can add clubs in **Teams & Roster**;
 each club can then create its own account from the gate. Add players, fixtures
 and score games as before. Accounts are local to this browser and device.
+
+---
+
+## Install on a phone, tablet or computer
+
+Serve the app over **HTTPS** (for example GitHub Pages) and open it once while
+online. On Android or desktop, use the browser's Install app / Add to Home screen
+menu, or the Install app button when offered. On iPhone and iPad, open the site
+in Safari and choose **Share → Add to Home Screen**. Browser and OS support
+varies. The installed app uses the same responsive interface as the website.
+
+After the first successful visit and service-worker installation, the app shell
+is available offline. Keep the app open online briefly on first use to allow it
+to finish downloading. Cloud/API features still require a network connection;
+the service worker never caches API responses or league data. Browser storage
+may be cleared by the OS or user, so export regular JSON backups. Accounts and
+league data are local to each browser/device; installing the app does not sync
+accounts or data between devices. Use the backup/restore tools to transfer league
+data, or configure the optional sync server separately.
+
+`file://` remains supported, but installation and service-worker offline caching
+require HTTPS (or localhost for development). Some iOS versions isolate the
+home-screen app's storage from Safari, so a new account and backup import may be
+needed there. This is a progressive web app, not an App Store or Play Store build.
+
+**Deploying updates:** increment the `CACHE` version in `sw.js` whenever shell
+files change. The new worker installs in the background and waits for existing
+app tabs to close before taking over, avoiding mixed versions during a session.
 
 ---
 

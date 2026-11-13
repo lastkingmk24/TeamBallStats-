@@ -24,8 +24,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Smoke tests (zero dependencies — Node built-ins only)
-        run: node tests/smoke.js
+      - name: Validate app and offline shell
+        run: |
+          for file in js/*.js server/*.js sw.js; do node --check "$file"; done
+          node tests/smoke.js
+          node tests/engine.js
+          node tests/mobile.js
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

@@ -91,6 +91,12 @@ async function setup() {
 
 async function run() {
   await setup();
+  ok('dashboard presents an accurate featured game action', () => {
+    T().dashboard.render(state());
+    assert.ok($('#dashboard-hero').textContent.includes('FEATURED GAME'));
+    assert.ok($('#dashboard-hero').textContent.includes('Open live console'));
+    assert.ok(!$('#dashboard-hero').textContent.includes('STREAM LIKE'));
+  });
   const hawks = 'team-hawks', wolves = 'team-wolves';
   const roster = state().players.filter(p => p.teamId === hawks && p.active !== false)
     .sort((a, b) => Number(a.number) - Number(b.number));

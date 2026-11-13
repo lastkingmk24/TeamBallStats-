@@ -1,0 +1,15 @@
+{
+  "id": "./",
+  "name": "TeamBallStats — Basketball League Manager",
+  "short_name": "TeamBallStats",
+  "description": "Manage your basketball league, games and stats on the go.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b1120",
+  "theme_color": "#0b1120",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
