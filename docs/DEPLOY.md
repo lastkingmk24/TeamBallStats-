@@ -5,7 +5,7 @@ TeamBallStats has two parts. You can run either one alone.
 | Part | What it is | Where it runs |
 |------|------------|---------------|
 | **The app** | Static files: `index.html`, `css/`, `js/`, `sample-data.json`. Works fully offline with data on each device. | Any static host. GitHub Pages is set up in `.github/workflows/deploy.yml`. |
-| **The sync server** (optional) | Node server in `server/`: accounts, cloud league sync with revisions, Pro analytics, billing webhook, operator CLI. It also serves the app files. | A machine or container with Node 22.13 or later and a writable data directory. |
+| **The sync server** (optional) | Node server in `server/`: accounts, cloud league sync with revisions, legacy insight API, billing webhook, operator CLI. It also serves the app files. | A machine or container with Node 22.13 or later and a writable data directory. |
 
 The app keeps working without the server. When no server answers `/api/health`
 on the same origin, the cloud panel reports that sync is off, and the rest of the
@@ -56,7 +56,7 @@ Start-up prints the URL, the database path, and the payment status:
 ```
 TeamBallStats 1.0.0 listening on http://0.0.0.0:8080
 Data file: data/teamballstats.db
-Payments: not configured (Pro is granted by the operator, see docs/DEPLOY.md)
+Game insights: free, available offline in the app
 ```
 
 Check it:
@@ -104,13 +104,14 @@ stats.example.org {
 }
 ```
 
-## 5. Accounts and Pro access (operator)
+## 5. Accounts and legacy entitlement records (operator)
 
 Accounts are created by users in the app (**Sign in → Create account**) unless
 `ALLOW_REGISTRATION=0`.
 
-Pro is an entitlement on an account. No payment provider is bundled, so this
-server takes no money. Grant Pro manually with the CLI:
+Game insights are free and computed locally; no grant or payment is needed.
+The following legacy commands only manage entitlement records for compatibility
+and do not control access to recap or lineup analytics:
 
 ```bash
 node server/cli.js list-users
@@ -167,7 +168,7 @@ substitute for backups.
 `.github/workflows/deploy.yml` publishes the **repository root** on every push
 to `main`. It runs `node tests/smoke.js` first. Pages only serves static files,
 so there is no `/api` there. The app then runs without cloud sync, and the
-cloud and Pro panels say the server is unavailable.
+cloud controls are hidden. Game insights remain available locally.
 
 The published site includes the server source code and tests. They contain no
 secrets: all configuration is read from the environment, and `.env` is ignored
@@ -199,10 +200,10 @@ NODE_PATH=/tmp/tbs-dom/node_modules node tests/dom/cloud-test.js   # 13 checks, 
 | Symptom | Cause and fix |
 |---------|---------------|
 | `EADDRINUSE` on start | Another process has the port. Change `PORT`. |
-| Cloud panel says "Cloud sync is off" | The app is on static hosting, or the proxy does not forward `/api`. Check `curl <origin>/api/health`. |
+| Cloud panel is hidden | Expected on static hosting. If using the optional server, check `curl <origin>/api/health`. |
 | Sign-in fails with `invalid_credentials` | Wrong username or password. The message is intentionally generic. |
 | `429 too_many_attempts` | Ten failed sign-ins in 15 minutes for one username from one IP. Wait 15 minutes. |
 | Sign-in works locally but not over HTTPS | Cookies are `Secure` when `COOKIE_SECURE=1`, so the site must really be HTTPS. |
-| Recap or lineups say `403 pro_required` | The account has no active Pro entitlement. Grant it with the CLI (section 5). |
+| Recap or lineups say `403 pro_required` | An old server/client version is still deployed. Update it; current insights need no entitlement. |
 | `Sync conflict` dialog | Another device saved since this one last synced. **Merge both** combines the changes and downloads backups of both copies. **Use cloud copy** or **Keep this device** take one side. **Decide later** pauses sync. Nothing is overwritten until you choose. |
 | `ExperimentalWarning: SQLite` on start | Expected on Node 22 and 24. It is not an error. |

@@ -1,7 +1,6 @@
 /* =========================================================================
- * pro.js — PRO analytics (PURE). Served by the backend only to accounts
- * with an active Pro entitlement (see server/app.js). The same code runs in
- * Node on the server, so the rules are identical everywhere.
+ * pro.js — local analytics (PURE), available to every app user offline.
+ * The same code also runs in Node for legacy server API consumers.
  *
  *   lineupRankings(state, opts)  five-man lineups ranked by net points per
  *                                10 minutes while on court, from substitution

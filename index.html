@@ -56,7 +56,7 @@
           </span>
           <div>
             <strong class="auth-wordmark">TeamBall<span>Stats</span></strong>
-            <span class="auth-hero-sub">League Pass · Basketball league manager</span>
+            <span class="auth-hero-sub">Basketball league manager</span>
           </div>
         </div>
         <h2 class="auth-headline">Every scoreboard,<br />box score and storyline<br />in one place.</h2>
@@ -186,7 +186,7 @@
 
         <div class="topbar-right">
           <button type="button" id="league-pass-btn" class="lp-btn">
-            <span aria-hidden="true" class="lp-dot"></span>League Pass
+            <span aria-hidden="true" class="lp-dot"></span>Games
           </button>
           <div class="record-chip" aria-live="off">
             <span class="record-label">Record</span>
@@ -357,7 +357,7 @@
           <button type="button" id="box-delete-btn" class="btn btn-danger-ghost">Delete game</button>
         </div>
         <div id="box-content"></div>
-        <div id="pro-panel" class="panel pro-panel no-print" aria-live="polite"></div>
+        <div id="pro-panel" class="panel pro-panel no-print" hidden aria-live="polite"></div>
       </section>
 
       <!-- ================= STANDINGS ================= -->
@@ -500,7 +500,7 @@
           </div>
         </div>
 
-        <div class="panel cloud-wrap no-print">
+        <div class="panel cloud-wrap no-print" hidden>
           <div class="cloud-head"><span class="badge" id="cloud-status-chip" data-state="off">Checking</span></div>
           <div id="cloud-panel"></div>
         </div>

@@ -475,6 +475,8 @@
   function render() {
     const host = qs('#cloud-panel');
     if (!host) return;
+    const wrap = host.closest('.cloud-wrap');
+    if (wrap) wrap.hidden = !st.available;
     const chip = qs('#cloud-status-chip');
     if (chip) {
       const label = !st.available ? 'Offline app' : (!signedIn() ? 'Not signed in' :
@@ -486,7 +488,7 @@
     const head = '<h3>Cloud sync &amp; accounts</h3>';
     if (!st.available) {
       host.innerHTML = head + '<p class="muted">' + ui.esc(st.message) + '</p>' +
-        '<p class="muted small">Everything in TeamBallStats works without the server: scoring, box scores, CSV, PDF and sharing. Cloud sync and Pro analytics need the server.</p>';
+        '<p class="muted small">Everything in TeamBallStats works without the server: scoring, box scores, CSV, PDF and sharing. Only cloud sync needs the server.</p>';
       return;
     }
     if (!signedIn()) {
@@ -503,10 +505,8 @@
         '<p class="form-hint" id="cloud-msg">' + ui.esc(st.message) + '</p>';
       return;
     }
-    const ent = st.entitlement || { plan: 'free', active: false };
-    const planText = ent.active ? 'Pro (' + (ent.source === 'webhook' ? 'subscription' : 'granted by operator') + ')' : 'Free';
     host.innerHTML = head +
-      '<p><strong>' + ui.esc(st.user.username) + '</strong> · plan: ' + ui.esc(planText) + '</p>' +
+      '<p><strong>' + ui.esc(st.user.username) + '</strong></p>' +
       '<p class="muted small" id="cloud-state" data-state="' + ui.esc(st.status) + '">' + ui.esc(st.message) + '</p>' +
       '<p class="muted small">Last synced: ' + ui.esc(timeText(st.lastSyncedAt)) + ' · revision ' + st.revision + '</p>' +
       '<div class="toolbar">' +

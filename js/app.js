@@ -219,7 +219,7 @@
           '</span>' +
           row(away, 'away', 'A') + row(home, 'home', 'H') +
           '<span class="strip-foot">' +
-            '<span class="strip-pass">League Pass</span>' +
+            '<span class="strip-pass">Games</span>' +
           '</span>' +
         '</button>';
       }).join('') +
@@ -375,7 +375,7 @@
       });
     }
 
-    /* "League Pass" in the header: the season's fixtures in one panel. */
+    /* "Games" in the header: the season's fixtures in one panel. */
     const passBtn = ui.qs('#league-pass-btn');
     if (passBtn) {
       passBtn.addEventListener('click', () => {
@@ -389,7 +389,7 @@
             ui.esc(team(g.homeTeamId).short || team(g.homeTeamId).name) + '</span>' +
           ui.statusBadge(g.status, g.halftime) + '</div>';
         ui.openDialog({
-          title: state.league.name + ' · League Pass',
+          title: state.league.name + ' · Games',
           bodyHtml:
             '<p class="muted small">Season ' + ui.esc(state.league.season || '—') + ' · ' +
               state.teams.length + ' clubs · ' + state.games.length + ' games</p>' +

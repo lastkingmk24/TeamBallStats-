@@ -176,10 +176,11 @@ curl -X POST https://stats.example.org/api/billing/webhook \
   -H 'Content-Type: application/json' -H "X-TBS-Signature: sha256=$sig" --data "$body"
 ```
 
-## Pro analytics
+## Game insights (legacy API paths)
 
-Pro routes run on the server, and the entitlement is checked there. The browser
-hides the Pro output for free accounts, but that check is not what protects it.
+The app computes insights locally for everyone, including offline. These legacy
+server routes remain available to signed-in accounts without an entitlement
+check. Authentication still protects each account's cloud document.
 
 Both routes take either `document` (the league to analyse) or nothing, in which
 case the account's cloud copy is used.
@@ -197,7 +198,7 @@ Response: the `gameRecap` result.
 * `labels.analysis`: states that the analysis is rule-based and not produced by
   a language model.
 
-Errors: `403 pro_required` (free account), `401` (signed-out), `404 game_not_found`,
+Errors: `401` (signed-out), `404 game_not_found`,
 `404 no_cloud_league`.
 
 ### `POST /api/pro/lineups`
@@ -219,6 +220,8 @@ node server/cli.js list-users
 node server/cli.js grant-pro <username> [--days N | --forever]   # default 30 days
 node server/cli.js revoke-pro <username>
 ```
+
+These legacy entitlement commands do not gate app insights.
 
 `grant-pro` is a manual grant (`source: "manual"`). No payment is involved.
 Each grant and revoke writes an `audit_log` row with actor `cli`.
