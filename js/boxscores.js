@@ -117,6 +117,9 @@
   function quarterTable(game, state) {
     const q = st.quarterScores(game, state.league);
     if (!q.tracked.some(Boolean)) return '';
+    const sumHome = q.home.reduce((a, b) => a + b, 0);
+    const sumAway = q.away.reduce((a, b) => a + b, 0);
+    const mismatch = sumHome !== (Number(game.homeScore) || 0) || sumAway !== (Number(game.awayScore) || 0);
     const cols = [{ label: 'Team' }].concat(
       Array.from({ length: q.count }, (_, i) => ({ label: 'Q' + (i + 1), align: 'right' }))
     ).concat([{ label: 'Final', align: 'right' }]);
@@ -131,8 +134,10 @@
     });
     return '<h3 class="subhead">Scoring by quarter</h3>' +
       '<div class="quarter-table">' + ui.table(cols, rows) + '</div>' +
-      '<p class="footnote">Quarter totals come from live-console plays. Manual score adjustments are included; ' +
-        'box-score edits are not.</p>';
+      '<p class="footnote">Quarter values are summed from live-console scoring (manual score adjustments are ' +
+        'included in their quarter). A box-score edit changes the Final score but not the quarter values.' +
+        (mismatch ? ' <strong>The quarters add up to ' + ui.fmtInt(sumHome) + '–' + ui.fmtInt(sumAway) +
+          ', which differs from the Final score.</strong>' : '') + '</p>';
   }
 
   function editorTable(state, teamId, title) {
@@ -261,7 +266,7 @@
           '<span class="final-score">' + ui.fmtInt(box.home.score) + '–' + ui.fmtInt(box.away.score) + '</span>' +
           '<span class="side">' + ui.esc(box.home.team.name) + '</span>' +
         '</div>' +
-        '<div class="box-meta">' + ui.statusBadge(game.status) + ' · ' + ui.fmtDate(game.date) +
+        '<div class="box-meta">' + ui.statusBadge(game.status, game.halftime) + ' · ' + ui.fmtDate(game.date) +
           (game.time ? ' ' + ui.fmtTime(game.time) : '') +
           (game.location ? ' · ' + ui.esc(game.location) : '') +
           ' · ' + ui.esc(resultText) +
@@ -397,12 +402,17 @@
           g.awayScore = payload.awayScore;
           g.notes = payload.notes;
           g.status = status;
-          if (status !== 'live') g.clockRunningSince = null;
+          if (status !== 'live') { g.clockRunningSince = null; g.halftime = false; }
         });
         ui.toast('Box score saved.', 'success');
       }
     });
   }
 
-  TBS.boxscores = { render: render, init: init, openGame: openGame };
+  TBS.boxscores = {
+    render: render,
+    init: init,
+    openGame: openGame,
+    selected: function () { return selectedGameId; }
+  };
 })(window.TBS = window.TBS || {});

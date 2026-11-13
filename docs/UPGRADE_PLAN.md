@@ -73,11 +73,11 @@ Project name is unchanged: **TeamBallStats**.
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Inspect, plan, this document | done |
-| 2 | Live dashboard: phases (pre-game / live / halftime / final), team fouls per quarter, scoreboard | in progress |
-| 3 | Two-tap stat entry (stat → jersey), 1/2/3-point buttons, undo for all entry types | in progress |
-| 4 | Player stats (OREB/DREB added), opponent aggregate tracking, box score, undo of aggregates | in progress |
+| 2 | Live dashboard: phases (pre-game / live / halftime / final), team fouls per quarter, scoreboard | done for phases, fouls, scoreboard, status badges. **Open:** optional shot clock not yet built |
+| 3 | Two-tap stat entry (stat → jersey), 1/2/3-point buttons, undo for all entry types | done (DOM-tested). Keyboard: R = defensive rebound, O = offensive rebound |
+| 4 | Player stats (OREB/DREB added), opponent aggregate tracking, box score, undo of aggregates | done. Box score editor save keeps the aggregate flag and clears halftime when not live (DOM-tested) |
 | 5 | Pro analytics: lineup rankings, AI-style recap, server-enforced gate | planned |
-| 6 | Exports and sharing: CSV (BOM + injection guard, box score CSV), PDF game report, share, e-mail | planned |
+| 6 | Exports and sharing: CSV (BOM + injection guard, box score CSV), PDF game report, share, e-mail | done for browser buttons (DOM-tested) and Node tests (CSV columns, BOM, formula guard, PDF xref). Share opens the summary dialog when the Web Share API is absent |
 | 7 | Accounts and cloud sync (server + browser client, conflicts, offline) | planned |
 | 8 | Subscription: entitlements, webhook, CLI grant, payments reported as not configured | planned |
 | 9 | Tests (Node unit + server integration + browser DOM test), bug fixes | planned |

@@ -271,8 +271,12 @@
     };
   }
 
+  /* RFC 4180 quoting plus spreadsheet-formula neutralisation: a cell that
+   * starts with = + @ TAB CR (or a minus that is not a number) is prefixed
+   * with an apostrophe so Excel / Google Sheets show it as text. */
   function csvCell(value) {
-    const s = value === null || value === undefined ? '' : String(value);
+    let s = value === null || value === undefined ? '' : String(value);
+    if (/^[=+@\t\r]/.test(s) || /^-(?!\d)/.test(s)) s = "'" + s;
     return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
 
@@ -325,6 +329,7 @@
   TBS.stats = {
     FIELDS: FIELDS,
     isAggregateLine: isAggregateLine,
+    csvCell: csvCell,
     sumLines: sumLines,
     pct: pct,
     avg: avg,
@@ -339,7 +344,6 @@
     gameBox: gameBox,
     leaderboard: leaderboard,
     toCSV: toCSV,
-    csvCell: csvCell,
     sortByDateDesc: sortByDateDesc,
     gamesForSeason: gamesForSeason,
     seasonsOf: seasonsOf

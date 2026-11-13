@@ -235,9 +235,7 @@
       const games = gamesInScope(state);
       const players = state.players.filter(p => filterTeam === 'all' || p.teamId === filterTeam);
       if (!players.length) { ui.toast('No players to export.', 'error'); return; }
-      const csv = st.toCSV(players, games, state.teams);
-      if (ui.download('teamballstats-player-stats-' + TBS.storage.todayISO() + '.csv',
-          csv, 'text/csv;charset=utf-8')) {
+      if (TBS.share.downloadPlayersCSV(players, games, state.teams)) {
         ui.toast('CSV exported (' + players.length + ' players).', 'success');
       }
     });

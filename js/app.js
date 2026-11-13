@@ -315,7 +315,7 @@
         catch (err) { console.error('[TeamBallStats] init failed in ' + tab + ':', err); }
       }
     });
-    ['profiles', 'shortcuts', 'access'].forEach(name => {
+    ['profiles', 'shortcuts', 'access', 'share'].forEach(name => {
       const mod = TBS[name];
       if (mod && typeof mod.init === 'function') {
         try { mod.init(); }
@@ -379,7 +379,7 @@
           '<span class="pass-date">' + ui.esc(ui.fmtDate(g.date)) + '</span>' +
           '<span class="pass-matchup">' + ui.esc(team(g.awayTeamId).short || team(g.awayTeamId).name) + ' @ ' +
             ui.esc(team(g.homeTeamId).short || team(g.homeTeamId).name) + '</span>' +
-          ui.statusBadge(g.status) + '</div>';
+          ui.statusBadge(g.status, g.halftime) + '</div>';
         ui.openDialog({
           title: state.league.name + ' · League Pass',
           bodyHtml:

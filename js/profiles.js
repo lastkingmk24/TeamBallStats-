@@ -173,6 +173,7 @@
               ui.icon('camera') + (player.photo ? ' Replace photo' : ' Add photo') + '</button>' +
             (player.photo ? '<button type="button" class="btn btn-mini" data-action="remove-photo">Remove photo</button>' : '') +
             '<button type="button" class="btn btn-mini" data-action="print-player">' + ui.icon('print') + ' Print profile</button>' +
+            '<button type="button" class="btn btn-mini" data-share-player="' + ui.esc(player.id) + '">Share summary</button>' +
           '</div>' +
         '</div>' +
       '</div>' +

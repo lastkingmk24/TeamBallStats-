@@ -491,8 +491,11 @@
     })), selectedId, placeholder);
   }
 
-  function statusBadge(status) {
+  function statusBadge(status, halftime) {
     const map = { scheduled: 'Scheduled', live: 'LIVE', final: 'Final' };
+    if (status === 'live' && halftime) {
+      return '<span class="badge badge-live">Halftime</span>';
+    }
     return '<span class="badge badge-' + esc(status) + '">' + esc(map[status] || status) + '</span>';
   }
 

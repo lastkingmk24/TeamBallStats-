@@ -607,7 +607,7 @@
 
     host.innerHTML =
       '<div class="box-header">' +
-        '<div class="box-meta">' + ui.statusBadge(game.status) +
+        '<div class="box-meta">' + ui.statusBadge(game.status, game.halftime) +
           ' <span class="phase-pill phase-' + phase + '">' + ui.esc(phaseLabel(game)) + '</span> · ' +
           ui.fmtDate(game.date) + (game.time ? ' ' + ui.fmtTime(game.time) : '') +
           (game.location ? ' · ' + ui.esc(game.location) : '') +
